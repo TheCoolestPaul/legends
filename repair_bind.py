@@ -5,9 +5,6 @@ from hull_bracing import HullBracing
 from hammering import Hammering
 from hull_patching import HullPatching
 import keyboard
-import pyscreeze
-import time
-import pyautogui
 
 
 def repair_callback(*args):

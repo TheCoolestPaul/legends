@@ -14,7 +14,6 @@ def show_pixels(*args):
     print(px)
     print(pyscreeze.pixel(px[0], px[1]))
 
-
 if __name__ == "__main__":
     mouse.on_click(show_pixels)
     keyboard.on_press_key("`", show_pixels)

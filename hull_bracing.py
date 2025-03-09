@@ -35,11 +35,11 @@ class HullBracing(RepairMiniGame):
 
     def play(self):
         starting_board = self.playfield
-        if pyscreeze.locate(self.green_line, starting_board, confidence=.9):
+        if pyscreeze.locate(self.green_line, starting_board, confidence=0.5):
             self.play_medium()
-        elif pyscreeze.locate(self.blue_line, starting_board, confidence=.9):
+        elif pyscreeze.locate(self.blue_line, starting_board, confidence=0.5):
             self.play_hard()
-        elif pyscreeze.locate(self.red_line, starting_board, confidence=.9):
+        elif pyscreeze.locate(self.red_line, starting_board, confidence=0.5):
             self.play_easy()
         else:
             self.play()
@@ -147,7 +147,7 @@ class HullBracing(RepairMiniGame):
         positions = []
         if field is None:
             field = self.playfield
-        block_places = list(pyscreeze.locateAll(block, field, confidence=.96))
+        block_places = list(pyscreeze.locateAll(block, field, confidence=0.2))
         for place in block_places:
             positions.append(self.find_placement(place))
         return positions
