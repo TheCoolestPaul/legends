@@ -10,11 +10,11 @@ class BilgePumping(RepairMiniGame):
         self.desired = "top"
         self.iterations = 0
         self.completed = False
-        self.button = Point(x=634, y=914)
+        self.button = Point(x=838, y=1221)
 
     def play(self):
-        top_strike_point = (682, 424)
-        bot_strike_point = (680, 650)
+        top_strike_point = (964, 540)
+        bot_strike_point = (964, 890)
         neutral_point = (982, 570)
         p1 = None
         p2 = None

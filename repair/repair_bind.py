@@ -1,8 +1,8 @@
 from hull_scrubbing import HullScrubbing
-from bilge_pumping import BilgePumping
+from repair.bilge_pumping import BilgePumping
 from plank_sawing import PlankSawing
 from hull_bracing import HullBracing
-from hammering import Hammering
+from repair.hammering import Hammering
 from hull_patching import HullPatching
 import keyboard
 

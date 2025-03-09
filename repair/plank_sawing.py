@@ -35,10 +35,11 @@ class PlankSawing(RepairMiniGame):
                 Point(x=1736, y=772)
             ],
             'letter_n': [
-                Point(x=1061, y=968),
-                Point(x=1226, y=687),
-                Point(x=1334, y=868),
-                Point(x=1497, y=589)
+                Point(x=1022, y=1017),
+                Point(x=1064, y=966),
+                Point(x=1226, y=689),
+                Point(x=1333, y=866),
+                Point(x=1499, y=581)
             ],
             'straight_horizontal': [
                 Point(x=783, y=773),
@@ -54,11 +55,11 @@ class PlankSawing(RepairMiniGame):
 
     def play(self):
         while endOfRound() == False:
+            img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
+            tools.to_png(img.rgb, img.size, output='./monitor-1.png')
             for plank in self.planks.keys():
                 try:
-                    img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
-                    tools.to_png(img.rgb, img.size, output='./monitor-1.png')
-                    region = pyscreeze.locate('./images/markers/plank_sawing/{}.png'.format(plank), './monitor-1.png', grayscale=True)
+                    region = pyscreeze.locate('./images/markers/plank_sawing/{}.png'.format(plank), './monitor-1.png', grayscale=True, confidence=0.95)
                 except:
                     region = None
                 if region:
