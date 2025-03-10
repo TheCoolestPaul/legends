@@ -1,70 +1,74 @@
 import pyautogui
 from repair_mini_game import *
-import time
-from PIL import Image
-
+from mss import mss
+import mss.tools as tools
+import keyboard  # Import the keyboard module
+import math  # To calculate distance
 
 class HullPatching(RepairMiniGame):
     def __init__(self):
         super().__init__()
         self.needed = 7
-        self.button = Point(x=1285, y=918)
-        self.patched_holes = 0
-        self.holes = [
-            Point(x=730, y=431),
-            Point(x=870, y=431),
-            Point(x=874, y=699),
-            Point(x=1226, y=699),
-            Point(x=874, y=559),
-            Point(x=1188, y=489),
-            Point(x=984, y=371),
-            Point(x=1122, y=369),
-            Point(x=872, y=691),
-            Point(x=702, y=367),
-            Point(x=1226, y=433),
-            Point(x=1056, y=627),
-            Point(x=1058, y=357),
-            Point(x=1156, y=565),
-            Point(x=724, y=431),
-            Point(x=868, y=693),
-            Point(x=1228, y=435),
-            Point(x=1156, y=695),
-            Point(x=736, y=557),
-            Point(x=838, y=487),
-            Point(x=732, y=697),
-            Point(x=1022, y=703),
-            Point(x=1046, y=491),
-            Point(x=938, y=557)
-        ]
+        self.button = Point(x=1708, y=1218)
         self.name = "hull_patching"
+        self.clicked_coords = []  # List to store clicked coordinates
+    
+    def checkComplete(self):
+        pyautogui.moveTo(100, 100)
+        img = mss().grab({"top":1155, "left":1631, "width":193, "height":136})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
+        try:
+            if pyautogui.locate("./images/markers/hull_patching/hull_patching_completion.png", "./temp.png", grayscale=True):
+                self.completed = True
+            else:
+                self.completed = False
+        except:
+            self.completed = False
+
+    def is_too_close(self, x, y):
+        """Checks if the (x, y) coordinate is within 10 pixels of any already clicked coordinate."""
+        for cx, cy in self.clicked_coords:
+            distance = math.sqrt((cx - x) ** 2 + (cy - y) ** 2)
+            if distance < 10:  # If the distance is less than 10 pixels, return True
+                return True
+        return False
+
+    def isGameActive(self):
+        img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
+        try:
+            if pyautogui.locate("./images/markers/hull_patching/hull_patching.png", "./temp.png", grayscale=True):
+                return True
+            else:
+                return False
+        except:
+            return False
 
     def play(self):
-        holes_patched = 0
-        needed = 17
-        hard_needed = 32
-        background = Image.open("./images/markers/hull_patching/background.png")
-        keep_going = True
-        while keep_going:
-            pyautogui.moveTo(100, 100)
-            new_snap = pyscreeze.screenshot(region=(650, 322, 1272 - 650, 752 - 322))
-            new_snap.save("./images/markers/hull_patching/temp.png")
-            last_click = [0, 0]
-            for x in range(new_snap.width):
-                for y in range(new_snap.height):
-                    new_px = new_snap.getpixel((x, y))
-                    if new_px == (0, 0, 0):
-                        if background.getpixel((x, y)) != new_px:
-                            if abs((650+x)-last_click[0]) > 40 or abs((322+y)-last_click[1]) > 40:
-                                last_click = [650 + x, 322 + y]
-                                pyautogui.click(650 + x, 322 + y)
-                                holes_patched += 1
-                                break
-            if pyscreeze.locate("./images/markers/hull_patching/choose_next_game.png",
-                                "./images/markers/hull_patching/temp.png"):
-                return
-            elif pyscreeze.locateOnScreen("./images/markers/ship_repair.PNG", region=(766, 120, 1152-766, 190-120)):
-                return
+        if not self.isGameActive():
+            print("{} isn't active.".format(self.name))
+            return
+        while not self.completed:
+            if keyboard.is_pressed('`'):  # If the backtick key is pressed
+                print("Backtick pressed, terminating process.")
+                break  # Exit the loop, effectively ending the game
+            
+            pyautogui.moveTo(100, 400)
+            img = mss().grab({"top": 420, "left": 851, "width": 852, "height": 580})
+            tools.to_png(img.rgb, img.size, output='./temp.png')
 
+            for x in range(img.width):
+                for y in range(img.height):
+                    new_px = img.pixel(x, y)
+                    above = img.pixel(x, y - 1)
+                    if x < 852 - 10 and y < 591 - 10 and x > 10 and y > 10 and new_px[2] > 100 and (above[0] < 10 and above[1] < 10 and above[2] < 10):
+                        if not self.is_too_close(851 + x, 415 + y):  # Check if the point is not too close to any previous click
+                            pyautogui.click(851 + x, 415 + y)
+                            self.clicked_coords.append((851 + x, 415 + y))  # Store the clicked coordinates
+                        break
+            self.clicked_coords = []
+            self.checkComplete()
+        print("Finished Patching!")
 
 if __name__ == "__main__":
     test = HullPatching()

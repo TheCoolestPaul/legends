@@ -6,6 +6,8 @@ import win32ui
 import pyscreeze
 import mouse
 import time
+from mss import mss
+import mss.tools as tools
 
 Point = collections.namedtuple("Point", "x y")
 Color = collections.namedtuple("Color", "r g b")
@@ -33,14 +35,13 @@ def pixel(x, y=None):
     return rgbint2rgbtuple(colorref)
 
 
-def points_to_region(p1, p2=None):
-    if p2 is None:
-        p2, p1 = p1
-    xi = min(p1[0], p2[0])
-    xf = max(p1[0], p2[0])
-    yi = min(p1[1], p2[1])
-    yf = max(p1[1], p2[1])
-    return [xi, yi, xf-xi, yf-yi]
+def points_to_region(p1, p2):
+    # Replace indexing (p1[0]) with accessing the 'x' attribute (p1.x)
+    xi = min(p1.x, p2.x)
+    yi = min(p1.y, p2.y)
+    xf = max(p1.x, p2.x)
+    yf = max(p1.y, p2.y)
+    return (xi, yi, xf, yf)
 
 
 class RepairMiniGame:
@@ -50,28 +51,10 @@ class RepairMiniGame:
         self.completed = False
         self.snapshot = "./images/markers/temp.png"
 
-    @property
-    def active(self):
-        activity = pyscreeze.locateOnScreen("./images/markers/{name}/{name}.png".format(name=self.name), region=(754, 112, 1162-754, 306-112))
-        if activity:
-            return True
-        else:
-            return False
-
-    @property
-    def complete(self):
-        if pyscreeze.locateOnScreen("./images/markers/{name}/{name}_completion.png".format(name=self.name), region=(518, 856, 1406-518, 978-856)):
-            return True
-        else:
-            return False
-
-    @property
-    def time_stopped(self):
-        time_shot = pyscreeze.screenshot("./images/markers/timer_timestamp.png", region=(886, 760, 1034-886, 818-760))
-        time.sleep(1)
-        return True
-
     def play(self):
+        pass
+
+    def isGameActive(self):
         pass
 
     def repair(self):

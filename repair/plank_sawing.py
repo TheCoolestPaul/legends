@@ -1,21 +1,8 @@
 import pyautogui
 from repair_mini_game import *
-import time
-import math
-import keyboard
 from mss import mss
 import mss.tools as tools
 import pyscreeze
-
-
-def endOfRound():
-            try:
-                img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
-                tools.to_png(img.rgb, img.size, output='./monitor-1.png')
-                region = pyscreeze.locate('./images/markers/another_game.png', './monitor-1.png', grayscale=True)
-            except:
-                    return False
-            return True
 
 class PlankSawing(RepairMiniGame):
     def __init__(self):
@@ -52,33 +39,49 @@ class PlankSawing(RepairMiniGame):
                 Point(x=1268, y=968)
             ]
         }
+    def checkComplete(self):
+        img = mss().grab({"top":1160, "left":984, "width":151, "height":126})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
+        try:
+            if pyautogui.locate("./images/markers/plank_sawing/plank_sawing_completion.png", "./temp.png", grayscale=True):
+                self.completed = True
+            else:
+                self.completed = False
+        except:
+            self.completed = False
+    
+    def isGameActive(self):
+        img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
+        try:
+            if pyautogui.locate("./images/markers/plank_sawing/plank_sawing.png", "./temp.png", grayscale=True):
+                return True
+            else:
+                return False
+        except:
+            return False
 
     def play(self):
-        while endOfRound() == False:
+        if not self.isGameActive() or self.completed:
+            print("{} isn't active.".format(self.name))
+            return
+        while not self.completed:
             img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
-            tools.to_png(img.rgb, img.size, output='./monitor-1.png')
+            tools.to_png(img.rgb, img.size, output='./temp.png')
             for plank in self.planks.keys():
                 try:
-                    region = pyscreeze.locate('./images/markers/plank_sawing/{}.png'.format(plank), './monitor-1.png', grayscale=True, confidence=0.95)
+                    region = pyscreeze.locate('./images/markers/plank_sawing/{}.png'.format(plank), './temp.png', grayscale=True, confidence=0.95)
                 except:
                     region = None
                 if region:
-                    print('Plank {} [{}] found'.format(plank, region))
                     direction_list = self.planks[plank]
                     pyautogui.moveTo(direction_list[0])
                     for point in direction_list:
-                        x1, y1 = pyautogui.position()
-                        x2, y2 = point
-                        dx = x2 - x1
-                        dy = y2 - y1
-                        dh = math.sqrt((dx ** 2) + (dy ** 2))
-                        duration = dh * .0002
-                        pyautogui.mouseDown(duration=duration)
-                        pyautogui.moveTo(point, duration=duration)
+                        pyautogui.mouseDown()
+                        pyautogui.moveTo(point)
                     pyautogui.mouseUp()
-                else:
-                    print('Plank {} not found'.format(plank))
-        print("End of round")
+            self.checkComplete()
+        print("Finished Sawing!")
 
 
 if __name__ == "__main__":

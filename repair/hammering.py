@@ -70,17 +70,33 @@ class Hammering(RepairMiniGame):
             pass
 
         return None
+    
+    def isGameActive(self):
+        img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
+        try:
+            if pyautogui.locate("./images/markers/hammering/hammering.png", "./temp.png", grayscale=True):
+                return True
+            else:
+                return False
+        except:
+            return False
 
     def play(self):
+        if not self.isGameActive():
+            print("{} isn't active.".format(self.name))
+            return
         nails = None
         while not nails:
             nails = self.find_nails()
+            time.sleep(1)
+            print("no nails?")
         else:
-            print(nails)
             for nail in nails:
                 while not self.click_when_best(nail[0], nail[1]):
                     pass
                 time.sleep(.05)
+        print("Finished hammering.")
 
 
 if __name__ == "__main__":
