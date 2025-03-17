@@ -17,12 +17,12 @@ COLOR_THRESHOLDS = {
 
 # Define positions for each piece type
 COLUMNS = {
-	"GG": Point(1011, 188),
-	"GB": Point(1117, 168),
-	"BB": Point(1182, 141),
-	"BR": Point(1249, 126),
-	"RR": Point(1375, 134),
-	"RG": Point(1450, 120)
+	"GG": Point(1011, 140),
+	"GB": Point(1117, 140),
+	"BB": Point(1182, 140),
+	"BR": Point(1249, 140),
+	"RR": Point(1320, 140),
+	"RG": Point(1416, 140)
 }
 
 def is_done():
@@ -40,7 +40,6 @@ def is_done():
 def get_current_piece():
 	"""Detects the current piece based on color pixels in a predefined region."""
 	pyautogui.moveTo(1017, 599)
-	time.sleep(0.01)
 	with mss() as sct:
 		screenshot = sct.grab({"top": 45, "left": 933, "width": 205, "height": 155})
 
@@ -69,8 +68,6 @@ def main():
 		else:
 			print(f"Nothing found, rotating piece: {current_piece}")
 			pyautogui.rightClick(1017, 599)  # Rotate piece
-
-		time.sleep(0.01)  # Slight delay to prevent excessive looping
 
 	elapsed_time = time.time() - start_time  # Calculate elapsed time
 	minutes, seconds = divmod(int(elapsed_time), 60)  # Convert to minutes:seconds
