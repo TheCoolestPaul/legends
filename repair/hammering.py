@@ -1,4 +1,3 @@
-from PIL import Image
 from repair_mini_game import *
 import time
 import win32api
