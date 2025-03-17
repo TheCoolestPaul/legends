@@ -2,12 +2,12 @@ import pyautogui
 import keyboard
 import mouse
 
-def show_pixels(*args):
+def show_pixels():
     px = pyautogui.position()
-    print(px)
+    print(f"Point({px.x}, {px.y})")
 
 lastPoint = None
-def makeRegion(_):
+def makeRegion():
     global lastPoint
     if lastPoint == None:
         lastPoint = pyautogui.position()
