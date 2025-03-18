@@ -60,18 +60,26 @@ def main():
 		current_piece = get_current_piece()
 
 		if current_piece in COLUMNS:
-			print(f"Found a good place for {current_piece}")
+			#print(f"Found a good place for {current_piece}")
 			pyautogui.moveTo(COLUMNS[current_piece].x, COLUMNS[current_piece].y)
 			pyautogui.click(COLUMNS[current_piece].x, COLUMNS[current_piece].y)
-		elif not current_piece:
-			print("Current piece is none!")
+		#elif not current_piece:
+			#print("Current piece is none!")
 		else:
-			print(f"Nothing found, rotating piece: {current_piece}")
 			pyautogui.rightClick(1017, 599)  # Rotate piece
 
 	elapsed_time = time.time() - start_time  # Calculate elapsed time
 	minutes, seconds = divmod(int(elapsed_time), 60)  # Convert to minutes:seconds
 	print(f"Done! Total time: {minutes}:{seconds:02d}")
+	pyautogui.click("./images/potions/continue.png")
+	pyautogui.click(1440, 815)
+	pyautogui.click(1440, 815)
+	pyautogui.click(1440, 815)
+	pyautogui.click(1440, 815)
+	pyautogui.click(1440, 815)
+	pyautogui.click("./images/potions/swift.png")
+	pyautogui.click("./images/potions/ok.png")
+	main()
 
 if __name__ == "__main__":
 	main()
