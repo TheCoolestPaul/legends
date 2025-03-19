@@ -14,7 +14,7 @@ class HullPatching(RepairMiniGame):
         self.clicked_coords = []  # List to store clicked coordinates
     
     def checkComplete(self):
-        pyautogui.moveTo(100, 100)
+        pyautogui.moveTo(100, 400)
         img = mss().grab({"top":1155, "left":1631, "width":193, "height":136})
         tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
