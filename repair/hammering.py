@@ -88,7 +88,7 @@ class Hammering(RepairMiniGame):
         nails = None
         while not nails:
             nails = self.find_nails()
-            time.sleep(1)
+            time.sleep(0.5)
             print("no nails?")
         else:
             for nail in nails:
