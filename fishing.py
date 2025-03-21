@@ -73,7 +73,10 @@ def detect_red_exclamation(debug=False):
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 150 < area < 4000:  # Ensuring it's the right size
+        x, y, w, h = cv2.boundingRect(cnt)  # Bounding box
+
+        # Check if it's tall enough (verticality) and within area range
+        if 100 < area < 4000 and h > w * 1.5:  # Ensure height is at least 1.5x width
             return True  # Exclamation detected
 
     return False  # No exclamation found
@@ -82,6 +85,47 @@ def debug_display(mask):
     """Displays the mask with detected red areas in a window for debugging."""
     cv2.imshow("Red Detection Debug", mask)
     cv2.waitKey(1)  # Refresh window quickly
+
+def check_health_bar():
+    """Stops reeling if the health bar decreases at all."""
+    global previous_height
+    current_height = get_health_bar_height()
+
+    if current_height < previous_height:  # Bar has shrunk
+        print("Health bar dropped! Stopping reel.")
+        pyautogui.mouseUp(998, 831)  # Stop reeling
+        previous_height = current_height  # Update tracked height
+        return False
+
+    previous_height = current_height  # Update for next check
+    return True
+
+
+def capture_health_bar():
+    """Captures the health bar region from the left side of the screen."""
+    region = {"top":297, "left":55, "width":28, "height":284} # Adjust these values
+    screen = capture_screen(region)
+    return screen
+
+
+def get_health_bar_height():
+    """Returns the height of the visible health bar."""
+    health_bar = capture_health_bar()
+    hsv = cv2.cvtColor(health_bar, cv2.COLOR_BGR2HSV)
+
+    # Define non-black mask (detects any color except black)
+    mask = cv2.inRange(hsv, np.array([0, 50, 50]), np.array([180, 255, 255]))
+
+    # Find contours of the remaining health bar
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        # Get the highest contour (tallest part of the bar)
+        _, y, _, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+        return h  # Return height of the bar
+    return 0  # If no bar detected, assume it's empty
+
+previous_height = get_health_bar_height()  # Initialize height tracking
 
 def main():
     start_time = time.time()
@@ -99,18 +143,24 @@ def main():
             print("Backtick pressed, terminating process.")
             break
 
-        if detect_red_exclamation():
-            if reeling:
-                print("Exclamation detected! Stopping reel.")
-                pyautogui.mouseUp(998, 831)
-                reeling = False
-        else:
+        if check_health_bar():  # Stop if the bar moves at all
             if not reeling:
-                print("No exclamation detected. Reeling again.")
+                print("No exclamation, and line is stable. Reeling again.")
                 pyautogui.mouseDown(998, 831)
                 reeling = True
 
-        time.sleep(0.05)
+        #if detect_red_exclamation():
+        #    if reeling:
+        #        print("Exclamation detected! Stopping reel.")
+        #        pyautogui.mouseUp(998, 831)
+        #        reeling = False
+        #else:
+        #    if not reeling:
+        #        print("No exclamation detected. Reeling again.")
+        #        pyautogui.mouseDown(998, 831)
+        #        reeling = True
+
+        #time.sleep(0.05)
 
     elapsed_time = time.time() - start_time
     minutes, seconds = divmod(int(elapsed_time), 60)
