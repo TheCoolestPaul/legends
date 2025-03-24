@@ -65,6 +65,7 @@ class PlankSawing(RepairMiniGame):
         if not self.isGameActive() or self.completed:
             print("{} isn't active.".format(self.name))
             return
+        pyautogui.PAUSE = 0.015
         while not self.completed:
             img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
             tools.to_png(img.rgb, img.size, output='./temp.png')
