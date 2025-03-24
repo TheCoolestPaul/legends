@@ -48,6 +48,7 @@ class HullPatching(RepairMiniGame):
         if not self.isGameActive():
             print("{} isn't active.".format(self.name))
             return
+        pyautogui.PAUSE = 0.01
         while not self.completed:
             if keyboard.is_pressed('`'):  # If the backtick key is pressed
                 print("Backtick pressed, terminating process.")
@@ -61,7 +62,7 @@ class HullPatching(RepairMiniGame):
                 for y in range(img.height):
                     new_px = img.pixel(x, y)
                     above = img.pixel(x, y - 1)
-                    if x < 852 - 10 and y < 591 - 10 and x > 10 and y > 10 and new_px[2] > 100 and (above[0] < 10 and above[1] < 10 and above[2] < 10):
+                    if x < 852 - 10 and y < 591 - 10 and x > 10 and y > 10 and new_px[2] > 100 and new_px[1] < 100 and new_px[0] < 100 and (above[0] < 10 and above[1] < 10 and above[2] < 10):
                         if not self.is_too_close(851 + x, 415 + y):  # Check if the point is not too close to any previous click
                             pyautogui.click(851 + x, 415 + y)
                             self.clicked_coords.append((851 + x, 415 + y))  # Store the clicked coordinates
