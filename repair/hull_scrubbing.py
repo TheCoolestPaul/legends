@@ -1,3 +1,4 @@
+import keyboard
 from repair_mini_game import *
 import pyautogui
 from mss import mss
@@ -34,11 +35,15 @@ class HullScrubbing(RepairMiniGame):
             return False
 
     def play(self):
+        pyautogui.PAUSE = 0.01
         if not self.isGameActive():
             print("{} isn't active.".format(self.name))
             return
         self.checkComplete()
         while not self.completed:
+            if keyboard.is_pressed('`'):
+                print("Backtick pressed, terminating process.")
+                break
             pyautogui.moveTo(100, 400)
             img = mss().grab({"top": 420, "left": 775, "width": 834, "height": 582})
 
@@ -57,6 +62,9 @@ class HullScrubbing(RepairMiniGame):
 
             print('Found {} places to scrub'.format(len(placesToScrub)))
             for x, y in placesToScrub:
+                if keyboard.is_pressed('`'):
+                    print("Backtick pressed, terminating process.")
+                    break
                 pyautogui.moveTo(x, y)
 
             self.checkComplete()
