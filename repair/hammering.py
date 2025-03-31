@@ -1,10 +1,7 @@
 import math
 import time
-import win32api
-import win32con
+import keyboard
 import pyautogui
-import cv2
-import numpy as np
 from mss import mss
 from repair_mini_game import *
 
@@ -13,67 +10,72 @@ class Hammering(RepairMiniGame):
         super().__init__()
         self.name = "hammering"
         self.button = Point(x=1505, y=1229)
-        self.monitor = {"top":436, "left":618, "width":743, "height":194}  # Screen area for nail detection
-        self.nail_template = "./images/repair/hammering/nail_head.png"  # Reference nail image for detection
+        self.clicked_coords = []  # List to store clicked coordinates
+
+    def is_too_close(self, x, y):
+        """Checks if the (x, y) coordinate is within 50 pixels of any already clicked coordinate."""
+        for cx, cy in self.clicked_coords:
+            distance = math.sqrt((cx - x) ** 2 + (cy - y) ** 2)
+            if distance < 50:  # If the distance is less than 50 pixels, return True
+                return True
+        return False
 
     def click_when_best(self, x, y):
         """Clicks on the nail when it's in the correct hammering state (red highlight)."""
         pyautogui.moveTo(x, y)
         with mss() as sct:
             screenshot = sct.grab({"top": y, "left": x, "width": 30, "height": 30})
-        if screenshot.pixel(15, 15)[0] > 200:  # Detect red (best timing to hammer)
-            win32api.SetCursorPos((x, y))
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
+        if screenshot.pixel(15, 15)[0] > 180:  # Detect red (best timing to hammer)
+            pyautogui.leftClick(x, y)
             return True
         return False
 
     def find_nails(self):
-        """Finds nails dynamically using OpenCV template matching and filters close detections."""
-        with mss() as sct:
-            img = np.array(sct.grab(self.monitor))  # Capture screen region as NumPy array
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
-
-        template = cv2.imread(self.nail_template, 0)
-        if template is None:
-            print("Error: Nail template image not found.")
-            return []
-
-        res = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-        threshold = 0.75
-        loc = np.where(res >= threshold)
-
+        """Finds nails dynamically by searching for four exact RGB pixel matches in the center of the nail."""
+        img = mss().grab({"top":617, "left":848, "width":860, "height":46})
+        
         detected_nails = []
-        for y, x in zip(*loc):
-            detected_nails.append((self.monitor["left"] + x, self.monitor["top"] + y))
+        
+        # Scan the image for matching pixel clusters
+        for x in range(img.width):
+            for y in range(img.height):
+                new_px = img.pixel(x, y)
+                above = img.pixel(x, y - 1)
+                if x < img.width - 5 and y < img.height - 5 and x > 5 and y > 5 and (new_px[0] >= 120 and new_px[1] >= 130 and new_px[2] >= 120) and (above[0] <= 95 and above[0] >= 80 and above[1] <= 95 and above[1] >= 80 and above[2] <= 95 and above[2] >= 80):
+                    if not self.is_too_close(img.width + x, img.height + y):  # Check if the point is not too close to any previous click
+                        self.clicked_coords.append((img.left + x - 5, img.top + y - 2))  # Store the clicked coordinates
+                        detected_nails.append((img.left + x - 5, img.top + y - 2))  # Store the detected nail coordinates
 
-        # Filter out nails that are too close to each other
-        filtered_nails = []
-        for x, y in detected_nails:
-            if all(math.hypot(x - fx, y - fy) >= 20 for fx, fy in filtered_nails):
-                filtered_nails.append((x, y))
+        return [Point(x, y) for x, y in detected_nails]
 
-        return [Point(x, y) for x, y in filtered_nails]
 
 
     def isGameActive(self):
         """Checks if the hammering mini-game is currently active."""
         with mss() as sct:
             img = sct.grab({"top": 141, "left": 1007, "width": 536, "height": 254})
+            tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
-            return pyautogui.locate("./images/markers/hammering/hammering.png", img, grayscale=True) is not None
-        except OSError:
+            if pyautogui.locate("./images/markers/hammering/hammering.png", "./temp.png", grayscale=True):
+                return True
+            else:
+                return False
+        except:
             return False
 
     def play(self):
         """Main gameplay loop: Finds nails and hammers them at the right time."""
-        #if not self.isGameActive():
-        #    print(f"{self.name} isn't active.")
-        #    return
+        pyautogui.PAUSE = 0.01  # Set a small pause between actions to avoid overwhelming the system
+        if not self.isGameActive():
+            print(f"{self.name} isn't active.")
+            return
 
         print("Searching for nails...")
         nails = []
         while not nails:
+            if keyboard.is_pressed('`'):
+                print("Backtick pressed, terminating process.")
+                break
             nails = self.find_nails()
             if not nails:
                 time.sleep(0.5)  # Wait and retry
@@ -82,9 +84,9 @@ class Hammering(RepairMiniGame):
         print(f"Found {len(nails)} nails. Hammering...")
 
         for nail in nails:
-            while not self.click_when_best(nail.x+10, nail.y+5):
-                time.sleep(0.05)  # Check frequently until it's the best moment to hammer
-
+            while not self.click_when_best(nail.x, nail.y):
+                time.sleep(0.01)  # Check frequently until it's the best moment to hammer
+        
         print("Finished hammering.")
 
 if __name__ == "__main__":
