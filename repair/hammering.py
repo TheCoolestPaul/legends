@@ -77,7 +77,7 @@ class Hammering(RepairMiniGame):
                 print("Backtick pressed, terminating process.")
                 break
             nails = self.find_nails()
-            if not nails:
+            if not nails or len(nails) > 10 or len(nails) < 3:
                 time.sleep(0.5)  # Wait and retry
                 print("No nails found. Retrying...")
 
