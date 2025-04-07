@@ -3,13 +3,14 @@ import time
 import keyboard
 import pyautogui
 from mss import mss
+import mss.tools as tools
 from repair_mini_game import *
 
 class Hammering(RepairMiniGame):
     def __init__(self):
         super().__init__()
         self.name = "hammering"
-        self.button = Point(x=1505, y=1229)
+        self.button = Point(x=1502, y=1223)
         self.clicked_coords = []  # List to store clicked coordinates
 
     def is_too_close(self, x, y):
@@ -42,19 +43,30 @@ class Hammering(RepairMiniGame):
                 new_px = img.pixel(x, y)
                 above = img.pixel(x, y - 1)
                 if x < img.width - 5 and y < img.height - 5 and x > 5 and y > 5 and (new_px[0] >= 120 and new_px[0] <= 200 and new_px[1] >= 130 and new_px[1] <= 200 and new_px[2] >= 120 and new_px[2] <= 200) and (above[0] <= 95 and above[0] >= 80 and above[1] <= 95 and above[1] >= 80 and above[2] <= 95 and above[2] >= 80):
-                    if not self.is_too_close(img.width + x, img.height + y):  # Check if the point is not too close to any previous click
+                    if not self.is_too_close(img.left + x, img.top + y):  # Check if the point is not too close to any previous click
                         self.clicked_coords.append((img.left + x - 5, img.top + y - 2))  # Store the clicked coordinates
                         detected_nails.append((img.left + x - 5, img.top + y - 2))  # Store the detected nail coordinates
 
         return [Point(x, y) for x, y in detected_nails]
 
-
+    def isGameCompleted(self):
+        pyautogui.moveTo(100, 400)
+        with mss() as sct:
+            img = sct.grab({"top":1139, "left":1393, "width":210, "height":153})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
+        try:
+            if pyautogui.locate("./images/markers/hammering/hammering_completion.png", "./temp.png", grayscale=True):
+                return True
+            else:
+                return False
+        except:
+            return False
 
     def isGameActive(self):
         """Checks if the hammering mini-game is currently active."""
         with mss() as sct:
-            img = sct.grab({"top": 141, "left": 1007, "width": 536, "height": 254})
-            tools.to_png(img.rgb, img.size, output='./temp.png')
+            img = sct.grab({"top":165, "left":1029, "width":506, "height":83})
+        tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
             if pyautogui.locate("./images/markers/hammering/hammering.png", "./temp.png", grayscale=True):
                 return True
@@ -66,29 +78,33 @@ class Hammering(RepairMiniGame):
     def play(self):
         """Main gameplay loop: Finds nails and hammers them at the right time."""
         pyautogui.PAUSE = 0.01  # Set a small pause between actions to avoid overwhelming the system
-        if not self.isGameActive():
-            print(f"{self.name} isn't active.")
-            return
-
-        print("Searching for nails...")
-        nails = []
-        while not nails:
+        
+        while not self.isGameCompleted() and self.isGameActive():
             if keyboard.is_pressed('`'):
                 print("Backtick pressed, terminating process.")
                 break
-            nails = self.find_nails()
-            if not nails or len(nails) > 10 or len(nails) < 3:
-                time.sleep(0.5)  # Wait and retry
-                print("No nails found. Retrying...")
 
-        print(f"Found {len(nails)} nails. Hammering...")
+            nails = []
+            while not nails and self.isGameActive() and not self.isGameCompleted():
+                nails = self.find_nails()
+                if not nails or len(nails) > 10 or len(nails) < 3:
+                    time.sleep(0.5)
+                    print("Looking for nails...")
+                    continue
+            if self.isGameCompleted() or not self.isGameActive():
+                print("Game completed or not active anymore.")
+                return
 
-        for nail in nails:
-            while not self.click_when_best(nail.x, nail.y):
-                time.sleep(0.01)  # Check frequently until it's the best moment to hammer
-        
-        print("Finished hammering.")
+            print(f"Found {len(nails)} nails. Hammering...")
+
+            for nail in nails:
+                attempts = 0
+                while not self.click_when_best(nail.x, nail.y) and attempts < 100:
+                    time.sleep(0.01)
+                    attempts += 1
+
+            self.clicked_coords = []
 
 if __name__ == "__main__":
     test = Hammering()
-    test.play()
+    test.repair()

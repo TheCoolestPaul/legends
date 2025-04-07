@@ -1,13 +1,7 @@
 import pyautogui
 import collections
 import win32gui
-import win32api
-import win32ui
-import pyscreeze
-import mouse
 import time
-from mss import mss
-import mss.tools as tools
 
 Point = collections.namedtuple("Point", "x y")
 Color = collections.namedtuple("Color", "r g b")
@@ -49,15 +43,24 @@ class RepairMiniGame:
         self.name = None
         self.button = None
         self.completed = False
-        self.snapshot = "./images/markers/temp.png"
 
     def play(self):
         pass
-
     def isGameActive(self):
+        pass
+    def isGameCompleted(self):
         pass
 
     def repair(self):
-        if self.button:
-            pyautogui.click(self.button)
+        if not self.isGameActive() and not self.isGameCompleted():
+            if self.button:
+                pyautogui.click(self.button)
+                time.sleep(0.5)
+                self.play()
+            else:
+                print("No button found to click.")
+                return
+        elif self.isGameActive() and not self.isGameCompleted():
             self.play()
+        
+        print("Game not active or completed.", self.isGameActive(), self.isGameCompleted())

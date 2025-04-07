@@ -7,7 +7,7 @@ import pyscreeze
 class PlankSawing(RepairMiniGame):
     def __init__(self):
         super().__init__()
-        self.button = Point(x=796, y=914)
+        self.button = Point(x=1055, y=1225)
         self.name = "plank_sawing"
         self.planks = {
             'forward_slash': [
@@ -39,16 +39,16 @@ class PlankSawing(RepairMiniGame):
                 Point(x=1268, y=968)
             ]
         }
-    def checkComplete(self):
-        img = mss().grab({"top":1160, "left":984, "width":151, "height":126})
+    def isGameCompleted(self):
+        img = mss().grab({"top":1154, "left":979, "width":160, "height":129})
         tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
             if pyautogui.locate("./images/markers/plank_sawing/plank_sawing_completion.png", "./temp.png", grayscale=True):
-                self.completed = True
+                return True
             else:
-                self.completed = False
+                return False
         except:
-            self.completed = False
+            return False
     
     def isGameActive(self):
         img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
@@ -62,11 +62,8 @@ class PlankSawing(RepairMiniGame):
             return False
 
     def play(self):
-        if not self.isGameActive() or self.completed:
-            print("{} isn't active.".format(self.name))
-            return
         pyautogui.PAUSE = 0.015
-        while not self.completed:
+        while not self.isGameCompleted():
             img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
             tools.to_png(img.rgb, img.size, output='./temp.png')
             for plank in self.planks.keys():
@@ -81,10 +78,9 @@ class PlankSawing(RepairMiniGame):
                         pyautogui.mouseDown()
                         pyautogui.moveTo(point)
                     pyautogui.mouseUp()
-            self.checkComplete()
         print("Finished Sawing!")
 
 
 if __name__ == "__main__":
     test = PlankSawing()
-    test.play()
+    test.repair()

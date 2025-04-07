@@ -13,17 +13,17 @@ class HullPatching(RepairMiniGame):
         self.name = "hull_patching"
         self.clicked_coords = []  # List to store clicked coordinates
     
-    def checkComplete(self):
+    def isGameCompleted(self):
         pyautogui.moveTo(100, 400)
         img = mss().grab({"top":1155, "left":1631, "width":193, "height":136})
         tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
             if pyautogui.locate("./images/markers/hull_patching/hull_patching_completion.png", "./temp.png", grayscale=True):
-                self.completed = True
+                return True
             else:
-                self.completed = False
+                return False
         except:
-            self.completed = False
+            return False
 
     def is_too_close(self, x, y):
         """Checks if the (x, y) coordinate is within 10 pixels of any already clicked coordinate."""
@@ -49,7 +49,7 @@ class HullPatching(RepairMiniGame):
             print("{} isn't active.".format(self.name))
             return
         pyautogui.PAUSE = 0.01
-        while not self.completed:
+        while not self.isGameCompleted() and self.isGameActive():
             if keyboard.is_pressed('`'):  # If the backtick key is pressed
                 print("Backtick pressed, terminating process.")
                 break  # Exit the loop, effectively ending the game
@@ -68,7 +68,7 @@ class HullPatching(RepairMiniGame):
                             self.clicked_coords.append((851 + x, 415 + y))  # Store the clicked coordinates
                         break
             self.clicked_coords = []
-            self.checkComplete()
+            self.isGameCompleted()
         print("Finished Patching!")
 
 if __name__ == "__main__":

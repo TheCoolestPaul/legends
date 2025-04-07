@@ -11,17 +11,17 @@ class HullScrubbing(RepairMiniGame):
         self.name = "hull_scrubbing"
         self.button = Point(x=834, y=1223)
 
-    def checkComplete(self):
+    def isGameCompleted(self):
         pyautogui.moveTo(100, 400)
         img = mss().grab({"top": 1127, "left": 727, "width": 219, "height": 174})
         tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
             if pyautogui.locate("./images/markers/hull_scrubbing/hull_scrubbing_completion.png", "./temp.png", grayscale=True):
-                self.completed = True
+                return True
             else:
-                self.completed = False
+                return False
         except:
-            self.completed = False
+            return False
 
     def isGameActive(self):
         img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
@@ -36,11 +36,8 @@ class HullScrubbing(RepairMiniGame):
 
     def play(self):
         pyautogui.PAUSE = 0.01
-        if not self.isGameActive():
-            print("{} isn't active.".format(self.name))
-            return
-        self.checkComplete()
-        while not self.completed:
+
+        while not self.isGameCompleted() and self.isGameActive():
             if keyboard.is_pressed('`'):
                 print("Backtick pressed, terminating process.")
                 break
@@ -72,4 +69,4 @@ class HullScrubbing(RepairMiniGame):
 
 if __name__ == "__main__":
     test = HullScrubbing()
-    test.play()
+    test.repair()
