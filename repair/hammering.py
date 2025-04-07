@@ -41,7 +41,7 @@ class Hammering(RepairMiniGame):
             for y in range(img.height):
                 new_px = img.pixel(x, y)
                 above = img.pixel(x, y - 1)
-                if x < img.width - 5 and y < img.height - 5 and x > 5 and y > 5 and (new_px[0] >= 120 and new_px[1] >= 130 and new_px[2] >= 120) and (above[0] <= 95 and above[0] >= 80 and above[1] <= 95 and above[1] >= 80 and above[2] <= 95 and above[2] >= 80):
+                if x < img.width - 5 and y < img.height - 5 and x > 5 and y > 5 and (new_px[0] >= 120 and new_px[0] <= 200 and new_px[1] >= 130 and new_px[1] <= 200 and new_px[2] >= 120 and new_px[2] <= 200) and (above[0] <= 95 and above[0] >= 80 and above[1] <= 95 and above[1] >= 80 and above[2] <= 95 and above[2] >= 80):
                     if not self.is_too_close(img.width + x, img.height + y):  # Check if the point is not too close to any previous click
                         self.clicked_coords.append((img.left + x - 5, img.top + y - 2))  # Store the clicked coordinates
                         detected_nails.append((img.left + x - 5, img.top + y - 2))  # Store the detected nail coordinates
