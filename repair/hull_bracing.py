@@ -1,20 +1,18 @@
 import hashlib
 import os
-import numpy as np
 import mss
+import numpy as np
+import mss.tools as tools
 import pyautogui
-import time
 import concurrent.futures
 from queue import PriorityQueue
 from threading import Lock
-import mss.tools as tools
 from repair_mini_game import *
-import keyboard
 
 class HullBracing(RepairMiniGame):
     def __init__(self):
         super().__init__()
-        self.button = Point(x=1274, y=1227)
+        self.button = Point(1272, 1225)
         self.grid_size = 4
         self.tile_width = 86
         self.tile_height = 84
@@ -24,27 +22,14 @@ class HullBracing(RepairMiniGame):
         self.name = "hull_bracing"
         pyautogui.PAUSE = 0.01
         os.makedirs("blocks", exist_ok=True)
-
-    def isGameCompleted(self):
-        pyautogui.moveTo(100, 400)
-        with mss.mss() as sct:
-            img = sct.grab({"top":1158, "left":1190, "width":162, "height":136})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/hull_bracing/hull_bracing_completion.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
         
     def isGameActive(self):
         pyautogui.moveTo(100, 400)
         with mss.mss() as sct:
-            img = sct.grab({"top":162, "left":1028, "width":505, "height":85})
+            img = sct.grab({"top":153, "left":1019, "width":523, "height":94})
         tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
-            if pyautogui.locate("./images/markers/hull_bracing/hull_bracing.png", "./temp.png", grayscale=True):
+            if pyautogui.locate("./images/markers/hull_bracing/hull_bracing.png", "./temp.png", grayscale=True, confidence=0.9):
                 return True
             else:
                 return False
@@ -111,8 +96,17 @@ class HullBracing(RepairMiniGame):
             global solution_found
             local_open = PriorityQueue()
             local_open.put((start_f, 0, flat_grid, []))
+            check_counter = 0
+            CHECK_INTERVAL = 100  # Only check completion every 100 iterations
             
             while not local_open.empty() and not solution_found:
+                check_counter += 1
+                # Check completion less frequently
+                if check_counter % CHECK_INTERVAL == 0:
+                    if self.isGameCompleted():
+                        solution_found = True
+                        return None
+                        
                 _, g_cost, current_state, moves = local_open.get()
                 
                 if self.is_goal_state(current_state):
@@ -142,9 +136,18 @@ class HullBracing(RepairMiniGame):
                 start_f = self.heuristic(flat_grid) + (i * 0.001)
                 futures.append(executor.submit(worker, self, i, start_f))
             
+            # Cancel all futures if game completes
             for future in concurrent.futures.as_completed(futures):
+                if self.isGameCompleted():
+                    for f in futures:
+                        f.cancel()
+                    return None
+                    
                 result = future.result()
                 if result is not None:
+                    # Cancel remaining futures when solution is found
+                    for f in futures:
+                        f.cancel()
                     return result
         
         return None
@@ -225,12 +228,15 @@ class HullBracing(RepairMiniGame):
             end_x, end_y = grid_positions[empty_row][empty_col]
             
             pyautogui.moveTo(start_x, start_y)
-            pyautogui.mouseDown()
-            pyautogui.moveTo(end_x, end_y, duration=0.02)
-            pyautogui.mouseUp()
+            pyautogui.mouseDown(start_x, start_y)
+            time.sleep(0.01)
+            pyautogui.moveTo(end_x, end_y)
+            pyautogui.mouseUp(end_x, end_y)
+
     def play(self):
         print("Playing Hull Bracing mini-game...")
         while not self.isGameCompleted() and self.isGameActive():
+            time.sleep(2)
             img = self.capture_grid()
             grid, positions = self.detect_grid(img)
             

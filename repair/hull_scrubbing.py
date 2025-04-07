@@ -11,18 +11,6 @@ class HullScrubbing(RepairMiniGame):
         self.name = "hull_scrubbing"
         self.button = Point(x=834, y=1223)
 
-    def isGameCompleted(self):
-        pyautogui.moveTo(100, 400)
-        img = mss().grab({"top": 1127, "left": 727, "width": 219, "height": 174})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/hull_scrubbing/hull_scrubbing_completion.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
-
     def isGameActive(self):
         img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
         tools.to_png(img.rgb, img.size, output='./temp.png')
@@ -63,8 +51,6 @@ class HullScrubbing(RepairMiniGame):
                     print("Backtick pressed, terminating process.")
                     break
                 pyautogui.moveTo(x, y)
-
-            self.checkComplete()
         print("Finished scrubbing!")
 
 if __name__ == "__main__":

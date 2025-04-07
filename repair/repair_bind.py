@@ -1,3 +1,4 @@
+from hull_bracing import HullBracing
 from hull_scrubbing import HullScrubbing
 from plank_sawing import PlankSawing
 from hammering import Hammering
@@ -10,15 +11,25 @@ def repair_callback(*args):
         PlankSawing,
         Hammering,
         HullPatching,
-        HullScrubbing
+        HullScrubbing,
+        HullBracing
     ]
     for game in games:
         mini_game = game()
-        if mini_game.isGameActive():
-            mini_game.play()
+        mini_game.repair()
 
 
 if __name__ == "__main__":
-    keyboard.on_press_key(key="`", callback=repair_callback)
+    gameClasses = [
+        PlankSawing,
+        Hammering,
+        HullPatching,
+        HullScrubbing,
+        HullBracing
+    ]
+    games = []
+    for game in gameClasses:
+        games.append(game())
     while True:
-        pass
+        for game in games:
+            game.repair()

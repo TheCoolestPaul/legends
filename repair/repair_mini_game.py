@@ -1,3 +1,4 @@
+import mss
 import pyautogui
 import collections
 import win32gui
@@ -42,14 +43,18 @@ class RepairMiniGame:
     def __init__(self):
         self.name = None
         self.button = None
-        self.completed = False
 
     def play(self):
         pass
     def isGameActive(self):
         pass
     def isGameCompleted(self):
-        pass
+        with mss.mss() as sct:
+            sct.grab({"top": self.button.y, "left": self.button.x, "width": 1, "height": 1})
+        if pixel(self.button)[1] > 100 and pixel(self.button)[0] < 10 and pixel(self.button)[2] < 10:
+            return True
+        else:
+            return False
 
     def repair(self):
         if not self.isGameActive() and not self.isGameCompleted():

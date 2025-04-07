@@ -24,7 +24,7 @@ class Hammering(RepairMiniGame):
     def click_when_best(self, x, y):
         """Clicks on the nail when it's in the correct hammering state (red highlight)."""
         pyautogui.moveTo(x, y)
-        with mss() as sct:
+        with mss.mss() as sct:
             screenshot = sct.grab({"top": y, "left": x, "width": 30, "height": 30})
         if screenshot.pixel(15, 15)[0] > 180:  # Detect red (best timing to hammer)
             pyautogui.leftClick(x, y)
@@ -33,7 +33,9 @@ class Hammering(RepairMiniGame):
 
     def find_nails(self):
         """Finds nails dynamically by searching for four exact RGB pixel matches in the center of the nail."""
-        img = mss().grab({"top":617, "left":848, "width":860, "height":46})
+
+        with mss.mss() as sct:
+            img = sct.grab({"top":617, "left":848, "width":860, "height":46})
         
         detected_nails = []
         
@@ -49,22 +51,9 @@ class Hammering(RepairMiniGame):
 
         return [Point(x, y) for x, y in detected_nails]
 
-    def isGameCompleted(self):
-        pyautogui.moveTo(100, 400)
-        with mss() as sct:
-            img = sct.grab({"top":1139, "left":1393, "width":210, "height":153})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/hammering/hammering_completion.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
-
     def isGameActive(self):
         """Checks if the hammering mini-game is currently active."""
-        with mss() as sct:
+        with mss.mss() as sct:
             img = sct.grab({"top":165, "left":1029, "width":506, "height":83})
         tools.to_png(img.rgb, img.size, output='./temp.png')
         try:
@@ -77,6 +66,7 @@ class Hammering(RepairMiniGame):
 
     def play(self):
         """Main gameplay loop: Finds nails and hammers them at the right time."""
+        print("Playing Hammering!")
         pyautogui.PAUSE = 0.01  # Set a small pause between actions to avoid overwhelming the system
         
         while not self.isGameCompleted() and self.isGameActive():

@@ -7,7 +7,7 @@ import pyscreeze
 class PlankSawing(RepairMiniGame):
     def __init__(self):
         super().__init__()
-        self.button = Point(x=1055, y=1225)
+        self.button = Point(1058, 1227)
         self.name = "plank_sawing"
         self.planks = {
             'forward_slash': [
@@ -39,16 +39,6 @@ class PlankSawing(RepairMiniGame):
                 Point(x=1268, y=968)
             ]
         }
-    def isGameCompleted(self):
-        img = mss().grab({"top":1154, "left":979, "width":160, "height":129})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/plank_sawing/plank_sawing_completion.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
     
     def isGameActive(self):
         img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
@@ -62,8 +52,9 @@ class PlankSawing(RepairMiniGame):
             return False
 
     def play(self):
+        print("Playing Plank Sawing...")
         pyautogui.PAUSE = 0.015
-        while not self.isGameCompleted():
+        while not self.isGameCompleted() and self.isGameActive():
             img = mss().grab({"top":300, "left":650, "width":1250, "height":1000})
             tools.to_png(img.rgb, img.size, output='./temp.png')
             for plank in self.planks.keys():
