@@ -1,58 +1,46 @@
-import keyboard
-from repair_mini_game import *
-import pyautogui
-from mss import mss
-import mss.tools as tools
+import numpy as np
+
+from repair_mini_game import BUTTONS, Point, RepairMiniGame, run_standalone
+from screen import check_stop, wait
+
+PLAY_REGION = (775, 420, 834, 582)
+BLOCK = 20            # ref px; scrub at most one spot per block
+MAX_SPOTS = 50        # per pass
 
 
 class HullScrubbing(RepairMiniGame):
-    def __init__(self):
-        super().__init__()
-        self.name = "hull_scrubbing"
-        self.button = Point(x=834, y=1223)
+    name = "hull_scrubbing"
+    title_marker = "hull_scrubbing/hull_scrubbing.PNG"
+    button = BUTTONS[0]
 
-    def isGameActive(self):
-        img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/hull_scrubbing/hull_scrubbing.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
-
-    def play(self):
-        pyautogui.PAUSE = 0.01
-
-        while not self.isGameCompleted() and self.isGameActive():
-            if keyboard.is_pressed('`'):
-                print("Backtick pressed, terminating process.")
+    def find_dirt(self):
+        """Bright (dirty) spots as ref Points, one per BLOCK x BLOCK cell."""
+        img = self.win.grab(*PLAY_REGION)
+        bright = (img > 150).all(axis=-1)
+        block = max(1, round(BLOCK * self.win.scale))
+        spots, seen = [], set()
+        ys, xs = np.nonzero(bright)
+        for x, y in zip(xs, ys):
+            cell = (x // block, y // block)
+            if cell in seen:
+                continue
+            seen.add(cell)
+            rx, ry = self.win.image_to_ref(PLAY_REGION, x, y)
+            spots.append(Point(round(rx), round(ry)))
+            if len(spots) >= MAX_SPOTS:
                 break
-            pyautogui.moveTo(100, 400)
-            img = mss().grab({"top": 420, "left": 775, "width": 834, "height": 582})
+        return spots
 
-            placesToScrub = set()  # Stores unique 10x10 blocks
-            checked_blocks = set()  # Tracks already checked 10x10 regions
+    def step(self):
+        self.win.park_mouse()
+        spots = self.find_dirt()
+        if not spots:
+            wait(0.2)
+            return
+        for spot in spots:
+            check_stop()
+            self.win.move(*spot)
 
-            for x in range(img.width):
-                for y in range(img.height):
-                    new_px = img.pixel(x, y)
-                    if new_px[0] > 150 and new_px[1] > 150 and new_px[2] > 150:
-                        block_x = (x // 20) * 20
-                        block_y = (y // 20) * 20
-                        if (block_x, block_y) not in checked_blocks and len(placesToScrub) < 50:
-                            placesToScrub.add((x + 775, y + 420))
-                            checked_blocks.add((block_x, block_y))
-
-            print('Found {} places to scrub'.format(len(placesToScrub)))
-            for x, y in placesToScrub:
-                if keyboard.is_pressed('`'):
-                    print("Backtick pressed, terminating process.")
-                    break
-                pyautogui.moveTo(x, y)
-        print("Finished scrubbing!")
 
 if __name__ == "__main__":
-    test = HullScrubbing()
-    test.repair()
+    run_standalone(HullScrubbing)

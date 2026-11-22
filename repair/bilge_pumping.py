@@ -1,75 +1,40 @@
-import keyboard
-import pyautogui
-from repair_mini_game import *
 import time
+
+from repair_mini_game import BUTTONS, Point, RepairMiniGame, run_standalone
+from screen import check_stop
+
+# The pump strikes alternate between a top and a bottom marker. When the
+# watched marker changes colour, clicking pumps.
+TOP_STRIKE = Point(953, 545)
+BOTTOM_STRIKE = Point(961, 878)
+NEUTRAL = Point(982, 570)
+STRIKE_WAIT = 3.0  # seconds to wait for a strike before re-deciding
 
 
 class BilgePumping(RepairMiniGame):
-    def __init__(self):
-        super().__init__()
-        self.name = "bilge_pumping"
-        self.desired = "top"
-        self.button = Point(x=838, y=1221)
+    name = "bilge_pumping"
+    title_marker = "bilge_pumping/bilge_pumping.PNG"
+    button = BUTTONS[0]  # same slot as hull scrubbing; shown at sea
 
-    def checkComplete(self):
-        pyautogui.moveTo(100, 400)
-        img = mss().grab({"top":1155, "left":755, "width":160, "height":136})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/bilge_pumping/bilge_pumping_completion.png", "./temp.png", grayscale=True):
-                self.completed = True
-            else:
-                self.completed = False
-        except:
-            self.completed = False
+    def __init__(self, window=None):
+        super().__init__(window)
+        self.watching = None  # TOP_STRIKE or BOTTOM_STRIKE
 
-    def isGameActive(self):
-        img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/bilge_pumping/bilge_pumping.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
-
-    def play(self):
-        if not self.isGameActive():
-            print("{} isn't active.".format(self.name))
-            return
-        top_strike_point = (953, 545)
-        bot_strike_point = (961, 878)
-        neutral_point = (982, 570)
-        p1 = None
-        p2 = None
-        while not self.completed:
-            if p1 is None:
-                p1 = pixel(top_strike_point)
-            if p2 is None:
-                p2 = pixel(bot_strike_point)
-            if p1[1] > p2[1]:
-                while p1 == pixel(top_strike_point):
-                    pass
-                else:
-                    pyautogui.click(neutral_point)
-                    p1 = (0, 0, 0)
-                    p2 = pixel(bot_strike_point)
-            else:
-                while p2 == pixel(bot_strike_point):
-                    pass
-                else:
-                    pyautogui.click(neutral_point)
-                    p2 = (0, 0, 0)
-                    p1 = pixel(top_strike_point)
-            if keyboard.is_pressed('`'):  # If the backtick key is pressed
-                print("Backtick pressed, terminating process.")
-                break  # Exit the loop, effectively ending the game
-            self.checkComplete()
-        print("Done pumping")
+    def step(self):
+        if self.watching is None:
+            top = self.win.pixel(*TOP_STRIKE)
+            bottom = self.win.pixel(*BOTTOM_STRIKE)
+            self.watching = TOP_STRIKE if top[1] > bottom[1] else BOTTOM_STRIKE
+        before = self.win.pixel(*self.watching)
+        deadline = time.monotonic() + STRIKE_WAIT
+        while time.monotonic() < deadline:
+            check_stop()
+            if self.win.pixel(*self.watching) != before:
+                self.win.click(*NEUTRAL)
+                self.watching = BOTTOM_STRIKE if self.watching == TOP_STRIKE else TOP_STRIKE
+                return
+        self.watching = None  # no strike seen; look again from scratch
 
 
 if __name__ == "__main__":
-    test = BilgePumping()
-    test.play()
-
+    run_standalone(BilgePumping)

@@ -1,61 +1,53 @@
-import pyautogui
-from repair_mini_game import *
-from mss import mss
-import mss.tools as tools
-import keyboard  # Import the keyboard module
-import math  # To calculate distance
+import numpy as np
+
+from repair_mini_game import BUTTONS, Point, RepairMiniGame, run_standalone
+from screen import check_stop, wait
+
+PLAY_REGION = (851, 420, 852, 580)
+EDGE_MARGIN = 10      # ref px ignored around the edge of the play area
+MIN_SPACING = 10      # ref px between two clicks in one pass
+CLICK_ABOVE = 5       # click slightly above the leak's top edge
+
 
 class HullPatching(RepairMiniGame):
-    def __init__(self):
-        super().__init__()
-        self.needed = 7
-        self.button = Point(x=1708, y=1218)
-        self.name = "hull_patching"
-        self.clicked_coords = []  # List to store clicked coordinates
+    name = "hull_patching"
+    title_marker = "hull_patching/hull_patching.PNG"
+    button = BUTTONS[4]
 
-    def is_too_close(self, x, y):
-        """Checks if the (x, y) coordinate is within 10 pixels of any already clicked coordinate."""
-        for cx, cy in self.clicked_coords:
-            distance = math.sqrt((cx - x) ** 2 + (cy - y) ** 2)
-            if distance < 10:  # If the distance is less than 10 pixels, return True
-                return True
-        return False
+    def find_leaks(self):
+        """Top edges of leaks: blue pixels with a black pixel right above.
 
-    def isGameActive(self):
-        img = mss().grab({"top":141, "left":1007, "width":536, "height":254})
-        tools.to_png(img.rgb, img.size, output='./temp.png')
-        try:
-            if pyautogui.locate("./images/markers/hull_patching/hull_patching.png", "./temp.png", grayscale=True):
-                return True
-            else:
-                return False
-        except:
-            return False
+        Returns at most one point per image column, as ref Points.
+        """
+        img = self.win.grab(*PLAY_REGION).astype(int)
+        r, g, b = img[..., 0], img[..., 1], img[..., 2]
+        blue = (b > 100) & (g < 100) & (r < 100)
+        black = (img < 10).all(axis=-1)
+        edge = blue[1:] & black[:-1]          # row i+1 blue, row i black
+        margin = max(1, round(EDGE_MARGIN * self.win.scale))
+        edge[:margin] = edge[-margin:] = False
+        edge[:, :margin] = edge[:, -margin:] = False
 
-    def play(self):
-        print("Playing Hull Patching!")
-        pyautogui.PAUSE = 0.01
-        while not self.isGameCompleted() and self.isGameActive():
-            if keyboard.is_pressed('`'):  # If the backtick key is pressed
-                print("Backtick pressed, terminating process.")
-                break  # Exit the loop, effectively ending the game
-            
-            pyautogui.moveTo(100, 400)
-            img = mss().grab({"top": 420, "left": 851, "width": 852, "height": 580})
-            tools.to_png(img.rgb, img.size, output='./temp.png')
+        leaks = []
+        cols = np.flatnonzero(edge.any(axis=0))
+        for col in cols:
+            row = np.argmax(edge[:, col]) + 1
+            x, y = self.win.image_to_ref(PLAY_REGION, col, row)
+            p = Point(round(x), round(y - CLICK_ABOVE))
+            if all((p.x - q.x) ** 2 + (p.y - q.y) ** 2 >= MIN_SPACING ** 2 for q in leaks):
+                leaks.append(p)
+        return leaks
 
-            for x in range(img.width):
-                for y in range(img.height):
-                    new_px = img.pixel(x, y)
-                    above = img.pixel(x, y - 1)
-                    if x < 852 - 10 and y < 591 - 10 and x > 10 and y > 10 and new_px[2] > 100 and new_px[1] < 100 and new_px[0] < 100 and (above[0] < 10 and above[1] < 10 and above[2] < 10):
-                        if not self.is_too_close(851 + x, 415 + y):  # Check if the point is not too close to any previous click
-                            pyautogui.click(851 + x, 415 + y)
-                            self.clicked_coords.append((851 + x, 415 + y))  # Store the clicked coordinates
-                        break
-            self.clicked_coords = []
-        print("Finished Patching!")
+    def step(self):
+        self.win.park_mouse()
+        leaks = self.find_leaks()
+        if not leaks:
+            wait(0.2)
+            return
+        for leak in leaks:
+            check_stop()
+            self.win.click(*leak)
+
 
 if __name__ == "__main__":
-    test = HullPatching()
-    test.repair()
+    run_standalone(HullPatching)
