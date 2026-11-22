@@ -1,6 +1,11 @@
-venv/*
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Scratch screenshots written by the scripts
 monitor-1.png
 temp.png
 matches.png
-temp.png
 /blocks

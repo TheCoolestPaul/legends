@@ -1,0 +1,13 @@
+# Windows only. Third-party packages imported by the scripts in this repo.
+pyautogui
+pyscreeze
+opencv-python   # cv2; also needed for pyautogui.locate(confidence=...)
+numpy
+Pillow          # PIL
+mss
+keyboard
+mouse
+pywin32         # win32api, win32con, win32gui, win32ui
+
+# Used by the older scripts (twins.py, tlopo_util.py, brew/, plural/, ...)
+window_input
