@@ -24,7 +24,7 @@ Open the repair screen on a ship, then run:
 .venv\Scripts\python repair\repair_bind.py
 ```
 
-It finds the game window itself, picks whichever minigame is open (or clicks the next unfinished one), until every button has its green check, then waits for the next repair screen. Press `` ` `` (backtick) to stop at any time, or move the mouse into a screen corner. A single game can be run with e.g. `python repair\hammering.py`.
+It finds the game window itself, picks whichever minigame is open (or clicks the next unfinished one), until every button has its green check, then waits for the next repair screen. Press `` ` `` (backtick) to stop at any time. It is a kill switch: the key is watched on its own thread, any held mouse button is released, and if the bot has not stopped 2 seconds later the process is killed. Ctrl+C or moving the mouse into a screen corner also stop it. A single game can be run with e.g. `python repair\hammering.py`.
 
 The window can be any size and anywhere on screen: coordinates in `repair/` are written for a maximised 2560x1440 window and scaled to the live window by `repair/screen.py`.
 

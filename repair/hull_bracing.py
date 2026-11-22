@@ -101,6 +101,8 @@ def solve(grid, max_expansions=MAX_EXPANSIONS):
         if cost > best_cost.get(state, cost):
             continue
         expansions += 1
+        if expansions % 1000 == 0:
+            check_stop()  # a full search takes seconds; stay stoppable
         for nxt, move in neighbours(state):
             if cost + 1 < best_cost.get(nxt, float("inf")):
                 best_cost[nxt] = cost + 1
@@ -130,9 +132,11 @@ class HullBracing(RepairMiniGame):
         end = tile_center(*divmod(dst, SIZE))
         self.win.move(*start)
         self.win.mouse_down(*start)
-        wait(0.01)
-        self.win.move(*end)
-        self.win.mouse_up(*end)
+        try:
+            wait(0.01)
+            self.win.move(*end)
+        finally:
+            self.win.mouse_up(*end)  # never leave the button held, even on stop
 
     def step(self):
         self.win.park_mouse()

@@ -26,6 +26,7 @@ Capture only ever reads the game window's client area:
 Mouse input is only sent while the game is the foreground window, and only
 to points inside the game area.
 """
+import contextlib
 import ctypes
 import functools
 import logging
@@ -83,24 +84,14 @@ class WindowNotFound(Exception):
     """The game window is missing or minimised."""
 
 
-_stop = threading.Event()
+# -- stopping ----------------------------------------------------------------
+VK_BACKTICK = 0xC0   # the ` ~ key (US/UK layouts)
+VK_LBUTTON = 0x01
+KILL_POLL = 0.02     # seconds between stop-key checks
+KILL_GRACE = 2.0     # seconds the bot gets to stop by itself before it is killed
 
-
-def install_stop_hotkey(key="`"):
-    """Pressing ``key`` anywhere stops the bots at their next check."""
-    import keyboard
-    keyboard.add_hotkey(key, request_stop)
-    log.info("Press %r to stop.", key)
-
-
-def prepare_live(stop_key="`"):
-    """Set up logging, input pacing and the stop hotkey for a live run."""
-    import pyautogui
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s",
-                        datefmt="%H:%M:%S")
-    pyautogui.PAUSE = 0.01
-    install_stop_hotkey(stop_key)
+_stop = threading.Event()      # a stop was requested
+_finished = threading.Event()  # the bot has shut down cleanly
 
 
 def request_stop():
@@ -109,6 +100,101 @@ def request_stop():
 
 def reset_stop():
     _stop.clear()
+    _finished.clear()
+
+
+def key_down(vk):
+    """True while the key is physically held, read straight from Windows."""
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def release_mouse():
+    """Release the left mouse button if it is held, so a drag never sticks."""
+    if sys.platform != "win32":
+        return
+    try:
+        if key_down(VK_LBUTTON):
+            import win32api
+            import win32con
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0)
+    except Exception:
+        log.exception("Could not release the mouse button")
+
+
+class KillSwitch:
+    """Watches the stop key on its own thread.
+
+    It polls the key state instead of installing a keyboard hook, so it keeps
+    working when Windows drops hooks from a busy process. On a press it logs,
+    requests a stop and releases the mouse. If the bot has not shut down
+    ``grace`` seconds later (stuck somewhere that never checks for a stop),
+    the whole process is killed.
+    """
+
+    def __init__(self, vk=VK_BACKTICK, grace=KILL_GRACE, poll=KILL_POLL,
+                 key_state=None, kill=None):
+        self.grace = grace
+        self.poll = poll
+        self.key_state = key_state or (lambda: key_down(vk))
+        self.kill = kill or (lambda: os._exit(1))
+        self.triggered = threading.Event()
+        self._thread = threading.Thread(target=self._watch, name="kill-switch",
+                                        daemon=True)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def _watch(self):
+        armed = not self.key_state()  # a key held at start must be released first
+        while not _finished.is_set():
+            down = self.key_state()
+            if down and armed:
+                self.trigger("Stop key pressed")
+                return
+            armed = armed or not down
+            time.sleep(self.poll)
+
+    def trigger(self, reason):
+        self.triggered.set()
+        log.warning("%s; stopping.", reason)
+        _stop.set()
+        release_mouse()
+        if not _finished.wait(self.grace):
+            log.error("Bot did not stop within %.0fs; killing it.", self.grace)
+            release_mouse()
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            self.kill()
+
+
+@contextlib.contextmanager
+def live_session():
+    """Run the body as a live bot session with every way of stopping it.
+
+    Backtick (kill switch), Ctrl+C and pyautogui's mouse-in-a-corner
+    fail-safe all end the session cleanly, and the mouse button is always
+    released on the way out.
+    """
+    import pyautogui
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s",
+                        datefmt="%H:%M:%S")
+    pyautogui.PAUSE = 0.01
+    reset_stop()
+    KillSwitch().start()
+    log.info("Press ` to stop (or Ctrl+C, or move the mouse into a screen corner).")
+    try:
+        yield
+    except StopRequested:
+        log.info("Stopped.")
+    except KeyboardInterrupt:
+        log.info("Stopped (Ctrl+C).")
+    except pyautogui.FailSafeException:
+        log.info("Stopped (mouse moved to a screen corner).")
+    finally:
+        release_mouse()
+        _finished.set()
 
 
 def check_stop():

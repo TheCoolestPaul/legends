@@ -1,7 +1,8 @@
 """Play every ship-repair minigame until the ship is fully repaired.
 
 Run from anywhere:  python repair/repair_bind.py
-Press ` (backtick) to stop, or slam the mouse into a screen corner.
+Press ` (backtick) to stop. If the bot has not stopped 2 seconds later, the
+process is killed. Ctrl+C or moving the mouse into a screen corner also stop it.
 """
 import logging
 import time
@@ -14,8 +15,7 @@ from hull_scrubbing import HullScrubbing
 from plank_sawing import PlankSawing
 from repair_mini_game import (BUTTONS, TITLE_REGION, TITLE_THRESHOLD,
                               button_completed, repair_bar_visible)
-from screen import (GameWindow, StopRequested, WindowNotFound, prepare_live,
-                    timed_out, wait)
+from screen import GameWindow, WindowNotFound, live_session, timed_out, wait
 
 log = logging.getLogger("repair")
 
@@ -90,14 +90,8 @@ class RepairBot:
 
 
 def main():
-    import pyautogui
-    prepare_live()
-    try:
+    with live_session():
         RepairBot(GameWindow()).run()
-    except StopRequested:
-        log.info("Stopped.")
-    except pyautogui.FailSafeException:
-        log.info("Stopped (mouse moved to a screen corner).")
 
 
 if __name__ == "__main__":

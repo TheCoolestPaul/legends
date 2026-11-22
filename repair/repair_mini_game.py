@@ -7,8 +7,8 @@ import logging
 import time
 from collections import namedtuple
 
-from screen import (GameWindow, StopRequested, WindowNotFound, check_stop,
-                    match_marker, timed_out, wait)
+from screen import (GameWindow, WindowNotFound, check_stop, match_marker,
+                    timed_out, wait)
 
 log = logging.getLogger("repair")
 
@@ -115,14 +115,9 @@ class RepairMiniGame:
 
 def run_standalone(game_class):
     """Entry point for running a single minigame from its own file."""
-    import pyautogui
-    from screen import prepare_live
-    prepare_live()
-    try:
-        game_class().repair()
-    except StopRequested:
-        log.info("Stopped.")
-    except pyautogui.FailSafeException:
-        log.info("Stopped (mouse moved to a screen corner).")
-    except WindowNotFound as e:
-        log.error("%s", e)
+    from screen import live_session
+    with live_session():
+        try:
+            game_class().repair()
+        except WindowNotFound as e:
+            log.error("%s", e)

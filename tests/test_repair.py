@@ -187,6 +187,126 @@ def test_input_waits_while_the_game_is_in_the_background(monkeypatch):
         screen.reset_stop()
 
 
+# -- kill switch -------------------------------------------------------------
+import subprocess
+import sys
+import time
+
+import screen
+from hull_bracing import HullBracing
+
+
+@pytest.fixture
+def clean_stop():
+    screen.reset_stop()
+    yield
+    screen._finished.set()   # lets any kill-switch thread exit
+    time.sleep(0.05)
+    screen.reset_stop()
+
+
+def key_timeline(*spans):
+    """Fake key state: spans of (seconds, held) played back from now."""
+    start = time.monotonic()
+
+    def state():
+        t = time.monotonic() - start
+        for seconds, held in spans:
+            if t < seconds:
+                return held
+            t -= seconds
+        return spans[-1][1]
+    return state
+
+
+def test_stop_key_is_noticed_quickly(clean_stop):
+    kills = []
+    switch = KillSwitchFor(key_timeline((0.1, False), (1, True)), kills, grace=5)
+    pressed_at = time.monotonic() + 0.1
+    assert screen._stop.wait(1)
+    assert time.monotonic() - pressed_at < 0.15     # polled every 20 ms
+    screen._finished.set()
+    switch._thread.join(1)
+    assert kills == []
+
+
+def test_key_held_at_start_must_be_released_first(clean_stop):
+    kills = []
+    KillSwitchFor(key_timeline((0.3, True), (0.2, False), (1, True)), kills, grace=5)
+    time.sleep(0.25)
+    assert not screen._stop.is_set()   # still the press from before start
+    assert screen._stop.wait(1)        # the new press after release counts
+
+
+def test_hard_kill_when_the_bot_ignores_stop(clean_stop):
+    kills = []
+    KillSwitchFor(key_timeline((0.05, False), (1, True)), kills, grace=0.3)
+    time.sleep(0.8)                    # never call _finished.set()
+    assert kills == ["killed"]
+
+
+def test_no_hard_kill_when_the_bot_stops_in_time(clean_stop):
+    kills = []
+    KillSwitchFor(key_timeline((0.05, False), (1, True)), kills, grace=0.5)
+    assert screen._stop.wait(1)
+    screen._finished.set()             # the bot shuts down cleanly
+    time.sleep(0.8)
+    assert kills == []
+
+
+def KillSwitchFor(key_state, kills, grace):
+    return screen.KillSwitch(key_state=key_state, grace=grace,
+                             kill=lambda: kills.append("killed")).start()
+
+
+HUNG_BOT = r"""
+import sys, time
+sys.path.insert(0, "repair")
+import logging; logging.basicConfig(level=logging.INFO)
+import screen
+start = time.monotonic()
+screen.KillSwitch(key_state=lambda: time.monotonic() - start > 0.3, grace=0.5).start()
+while True:          # a stuck bot: never checks for a stop
+    time.sleep(0.05)
+"""
+
+
+def test_a_hung_bot_process_is_killed():
+    started = time.monotonic()
+    proc = subprocess.run([sys.executable, "-c", HUNG_BOT], cwd=ROOT,
+                          capture_output=True, text=True, timeout=10)
+    elapsed = time.monotonic() - started
+    assert proc.returncode == 1
+    assert "killing it" in proc.stderr
+    assert elapsed < 5
+
+
+def test_solver_stops_mid_search(clean_stop):
+    unsolvable = [list("BBBO"), list("RRRO"), list("OOO "), list("OO B")]
+    screen.request_stop()
+    started = time.monotonic()
+    with pytest.raises(screen.StopRequested):
+        solve(unsolvable)
+    assert time.monotonic() - started < 0.5   # a full search takes ~2 s
+
+
+def test_stopping_mid_drag_releases_the_mouse(clean_stop):
+    win = window(PATCHING)
+    screen.request_stop()
+    with pytest.raises(screen.StopRequested):
+        HullBracing(win).slide(0, 1)
+    assert [a[0] for a in win.actions] == ["move", "down", "up"]
+
+
+def test_live_session_ends_cleanly_on_ctrl_c(clean_stop, monkeypatch):
+    released = []
+    monkeypatch.setattr(screen, "release_mouse", lambda: released.append(True))
+    monkeypatch.setattr(screen, "KillSwitch", lambda: type("K", (), {"start": lambda s: s})())
+    with screen.live_session():
+        raise KeyboardInterrupt
+    assert released and screen._finished.is_set()
+
+
 # -- stopping ----------------------------------------------------------------
 def test_stop_interrupts_a_running_game():
     """The bot loop must exit promptly when stop is requested mid-game."""
