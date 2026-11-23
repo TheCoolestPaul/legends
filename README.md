@@ -28,6 +28,23 @@ It finds the game window itself, picks whichever minigame is open (or clicks the
 
 The window can be any size and anywhere on screen: coordinates in `repair/` are written for a maximised 2560x1440 window and scaled to the live window by `repair/screen.py`.
 
+### Debug frames
+The bots save the game area to `debug_frames/` (git-ignored) as a PNG plus a JSON file saying why and what the bot saw:
+
+- automatically when something goes wrong: a game times out, won't open, crashes, finds no nails/leaks/dirt/plank for a while, the bracing solver finds no solution, or a bracing tile can't be read
+- when you press **F9**
+- about once a second during every game with `--record`, to collect frames for tests:
+
+```
+.venv\Scripts\python repair\repair_bind.py --record
+```
+
+To see what every detector makes of a saved frame:
+
+```
+.venv\Scripts\python repair\replay.py debug_frames\<frame>.png
+```
+
 Offline tests (run against screenshots in the repo, at 720p, 1080p and 1440p):
 
 ```

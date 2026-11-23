@@ -9,3 +9,6 @@ monitor-1.png
 temp.png
 matches.png
 /blocks
+
+# Frames saved by the repair bots (F9, --record, failures)
+debug_frames/

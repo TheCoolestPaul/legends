@@ -30,6 +30,7 @@ import contextlib
 import ctypes
 import functools
 import logging
+import math
 import os
 import sys
 import threading
@@ -54,6 +55,9 @@ WINDOW_TITLES = (
     "The Legend of Pirates Online [BETA]",
     "The Legend of Pirates Online",
 )
+
+DRAG_STEP = 15       # ref px between cursor positions while dragging
+DRAG_DELAY = 0.008   # seconds between those positions (~1 per game frame)
 
 CAPTURE_MODES = ("bitblt", "printwindow", "screen")
 PRINTWINDOW_REUSE = 0.015  # s; one PrintWindow frame serves grabs this close together
@@ -132,11 +136,17 @@ class KillSwitch:
     """
 
     def __init__(self, vk=VK_BACKTICK, grace=KILL_GRACE, poll=KILL_POLL,
-                 key_state=None, kill=None):
+                 key_state=None, kill=None, hotkeys=None):
+        """``hotkeys`` maps extra keys to callbacks: {vk or state_fn: callback}.
+
+        Each callback runs on this thread when its key goes down.
+        """
         self.grace = grace
         self.poll = poll
         self.key_state = key_state or (lambda: key_down(vk))
         self.kill = kill or (lambda: os._exit(1))
+        self.hotkeys = [((lambda k=key: key_down(k)) if isinstance(key, int) else key, cb)
+                        for key, cb in (hotkeys or {}).items()]
         self.triggered = threading.Event()
         self._thread = threading.Thread(target=self._watch, name="kill-switch",
                                         daemon=True)
@@ -146,13 +156,23 @@ class KillSwitch:
         return self
 
     def _watch(self):
-        armed = not self.key_state()  # a key held at start must be released first
+        # A key already held at start must be released before it counts.
+        armed = not self.key_state()
+        was_down = [state() for state, _ in self.hotkeys]
         while not _finished.is_set():
             down = self.key_state()
             if down and armed:
                 self.trigger("Stop key pressed")
                 return
             armed = armed or not down
+            for i, (state, callback) in enumerate(self.hotkeys):
+                now = state()
+                if now and not was_down[i]:
+                    try:
+                        callback()
+                    except Exception:
+                        log.exception("Hotkey callback failed")
+                was_down[i] = now
             time.sleep(self.poll)
 
     def trigger(self, reason):
@@ -169,20 +189,21 @@ class KillSwitch:
 
 
 @contextlib.contextmanager
-def live_session():
+def live_session(hotkeys=None, debug=False):
     """Run the body as a live bot session with every way of stopping it.
 
     Backtick (kill switch), Ctrl+C and pyautogui's mouse-in-a-corner
     fail-safe all end the session cleanly, and the mouse button is always
-    released on the way out.
+    released on the way out. ``hotkeys`` are extra keys for the watcher
+    thread (see KillSwitch).
     """
     import pyautogui
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG if debug else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s",
                         datefmt="%H:%M:%S")
     pyautogui.PAUSE = 0.01
     reset_stop()
-    KillSwitch().start()
+    KillSwitch(hotkeys=hotkeys).start()
     log.info("Press ` to stop (or Ctrl+C, or move the mouse into a screen corner).")
     try:
         yield
@@ -462,6 +483,26 @@ class GameWindow:
         # Always release, even if the game lost focus mid-drag.
         import pyautogui
         pyautogui.mouseUp()
+
+    def drag(self, path, step=DRAG_STEP, delay=DRAG_DELAY):
+        """Hold the left button and move along ``path`` (ref points) smoothly.
+
+        The game samples the cursor once per frame, so jumping straight
+        between corners looks like leaving the line; this moves in small
+        steps instead. The button is always released, even on a stop.
+        """
+        self.move(*path[0])
+        self.mouse_down(*path[0])
+        try:
+            for (x0, y0), (x1, y1) in zip(path, path[1:]):
+                n = max(1, math.ceil(math.hypot(x1 - x0, y1 - y0) / step))
+                for i in range(1, n + 1):
+                    check_stop()
+                    self.move(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n)
+                    if delay:
+                        time.sleep(delay)
+        finally:
+            self.mouse_up(*path[-1])
 
     def park_mouse(self):
         """Move the cursor to the left edge of the game so it hides nothing."""

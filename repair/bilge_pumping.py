@@ -32,7 +32,10 @@ class BilgePumping(RepairMiniGame):
             if self.win.pixel(*self.watching) != before:
                 self.win.click(*NEUTRAL)
                 self.watching = BOTTOM_STRIKE if self.watching == TOP_STRIKE else TOP_STRIKE
+                self.found("strike")
                 return
+        self.info = {"watching": self.watching._asdict(), "colour": before}
+        self.nothing_found("strike", after=3)
         self.watching = None  # no strike seen; look again from scratch
 
 

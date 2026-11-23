@@ -1,6 +1,8 @@
 """Play every ship-repair minigame until the ship is fully repaired.
 
 Run from anywhere:  python repair/repair_bind.py
+Options: --record saves frames of every game to debug_frames/, --debug logs more.
+F9 saves a debug frame of whatever is on screen.
 Press ` (backtick) to stop. If the bot has not stopped 2 seconds later, the
 process is killed. Ctrl+C or moving the mouse into a screen corner also stop it.
 """
@@ -13,15 +15,20 @@ from hull_bracing import HullBracing
 from hull_patching import HullPatching
 from hull_scrubbing import HullScrubbing
 from plank_sawing import PlankSawing
+import snapshots
 from repair_mini_game import (BUTTONS, TITLE_REGION, TITLE_THRESHOLD,
-                              button_completed, repair_bar_visible)
-from screen import GameWindow, WindowNotFound, live_session, timed_out, wait
+                              button_completed, parse_args, repair_bar_visible,
+                              session_hotkeys)
+from screen import (GameWindow, StopRequested, WindowNotFound, live_session,
+                    timed_out, wait)
 
 log = logging.getLogger("repair")
 
 GAME_CLASSES = [HullScrubbing, BilgePumping, PlankSawing, HullBracing,
                 Hammering, HullPatching]
 MAX_START_ATTEMPTS = 3  # per button, before skipping it until the bar resets
+START_WAIT = 6          # seconds to wait for a clicked button's game to open
+RECLICK_AFTER = 2.0     # click the button again if nothing has opened by then
 
 
 class RepairBot:
@@ -30,6 +37,7 @@ class RepairBot:
         self.games = [cls(window) for cls in GAME_CLASSES]
         self.failed_starts = {}
         self.announced_done = False
+        self.skipped = set()   # games that timed out on this ship
 
     def active_game(self):
         """The minigame whose title is on screen, or None."""
@@ -38,33 +46,77 @@ class RepairBot:
         score, game = max(scored, key=lambda pair: pair[0])
         return game if score >= TITLE_THRESHOLD else None
 
-    def wait_for_game(self, seconds=3):
-        deadline = time.monotonic() + seconds
+    def playable_game(self):
+        """The open minigame if it still needs playing, else None.
+
+        A finished game keeps its title on screen (over "Choose Another
+        Game") until another one is picked, so a title alone is not enough.
+        """
+        game = self.active_game()
+        return game if game and not game.is_completed() else None
+
+    def wait_for_game(self, button, seconds=START_WAIT):
+        """Wait for the game behind ``button`` to open; return it or None.
+
+        Live, a game can take ~3.5 s to switch in after the previous one
+        finishes, and may open already done when this ship doesn't need it.
+        """
+        started = time.monotonic()
+        deadline = started + seconds
+        reclicked = False
         while not timed_out(deadline):
             wait(0.2)
             game = self.active_game()
-            if game:
+            if game is not None and game.button == button:
                 return game
+            if not reclicked and time.monotonic() - started > RECLICK_AFTER:
+                # Live: the click right after a game finishes is sometimes
+                # ignored outright; a second click opens it at once.
+                self.win.click(*button)
+                self.win.park_mouse()
+                reclicked = True
         return None
 
     def tick(self):
         """One pass of the main loop."""
         self.win.refresh()
-        game = self.active_game()
-        if game:
-            game.play()
+        snapshots.take_requested(self.win)
+        shown = self.active_game()
+        if shown and not shown.is_completed() and shown.name not in self.skipped:
+            try:
+                shown.play()
+                if shown.timed_out:
+                    # Don't restart a game that can't be finished; do the rest.
+                    log.warning("Skipping %s for the rest of this ship", shown.name)
+                    self.skipped.add(shown.name)
+            except (StopRequested, WindowNotFound):
+                raise
+            except Exception:
+                # One broken game should not end the whole run.
+                log.exception("%s crashed", shown.name)
+                shown.snapshot("error")
+                wait(1)
             return
-        if not repair_bar_visible(self.win):
+        # A game title means the repair window is open, even when the
+        # selected button's frame hides the bar marker.
+        if shown is None and not repair_bar_visible(self.win):
             self.failed_starts.clear()
+            self.skipped.clear()
             self.announced_done = False
             wait(1)
             return
-        pending = [b for b in BUTTONS
-                   if not button_completed(self.win, b)
+        done = [button_completed(self.win, b) for b in BUTTONS]
+        if shown is None and not any(done):
+            self.skipped.clear()           # a fresh ship: try everything again
+        skipped_buttons = {g.button for g in self.games if g.name in self.skipped}
+        pending = [b for b, d in zip(BUTTONS, done)
+                   if not d and b not in skipped_buttons
                    and self.failed_starts.get(b, 0) < MAX_START_ATTEMPTS]
         if not pending:
             if not self.announced_done:
-                log.info("Nothing left to repair.")
+                log.info("Nothing left to repair%s.",
+                         " (skipped: %s)" % ", ".join(sorted(self.skipped))
+                         if self.skipped else "")
                 self.announced_done = True
             wait(1)
             return
@@ -72,10 +124,17 @@ class RepairBot:
         button = pending[0]
         self.win.click(*button)
         self.win.park_mouse()
-        if self.wait_for_game() is None:
-            self.failed_starts[button] = self.failed_starts.get(button, 0) + 1
-            log.warning("Button at %s opened nothing (attempt %d)",
-                        button, self.failed_starts[button])
+        opened = self.wait_for_game(button)
+        if opened is not None:
+            if opened.is_completed():
+                log.info("%s: nothing to repair on this ship", opened.name)
+            return
+        self.failed_starts[button] = self.failed_starts.get(button, 0) + 1
+        log.warning("Button at %s opened nothing (attempt %d)",
+                    button, self.failed_starts[button])
+        snapshots.save(self.win, "button_opened_nothing",
+                       info={"button": button._asdict(),
+                             "attempt": self.failed_starts[button]})
 
     def run(self):
         last_warning = 0.0
@@ -90,7 +149,9 @@ class RepairBot:
 
 
 def main():
-    with live_session():
+    args = parse_args("Play every ship-repair minigame until the ship is repaired.")
+    with live_session(hotkeys=session_hotkeys(), debug=args.debug):
+        log.info("F9 saves a debug frame%s.", "; recording frames" if args.record else "")
         RepairBot(GameWindow()).run()
 
 

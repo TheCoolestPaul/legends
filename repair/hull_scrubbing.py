@@ -34,9 +34,12 @@ class HullScrubbing(RepairMiniGame):
     def step(self):
         self.win.park_mouse()
         spots = self.find_dirt()
+        self.info = {"dirt_spots": len(spots)}
         if not spots:
+            self.nothing_found("dirt")
             wait(0.2)
             return
+        self.found("dirt")
         for spot in spots:
             check_stop()
             self.win.move(*spot)
