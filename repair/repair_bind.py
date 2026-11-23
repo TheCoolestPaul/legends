@@ -28,7 +28,8 @@ GAME_CLASSES = [HullScrubbing, BilgePumping, PlankSawing, HullBracing,
                 Hammering, HullPatching]
 MAX_START_ATTEMPTS = 3  # per button, before skipping it until the bar resets
 START_WAIT = 6          # seconds to wait for a clicked button's game to open
-RECLICK_AFTER = 2.0     # click the button again if nothing has opened by then
+RECLICK_EVERY = 1.0     # click the button again this often until its game opens
+SLOW_OPEN = 1.5         # log how long a game took to open beyond this
 WINDOW_CLOSED = object()  # wait_for_game(): the repair window went away
 
 
@@ -65,23 +66,28 @@ class RepairBot:
         """
         started = time.monotonic()
         deadline = started + seconds
-        reclicked = False
+        last_click, clicks = started, 1
         while not timed_out(deadline):
-            wait(0.2)
+            wait(0.1)
             game = self.active_game()
             if game is not None and game.button == button:
+                took = time.monotonic() - started
+                if took > SLOW_OPEN:
+                    log.info("%s took %.1fs to open (%d click%s)", game.name, took,
+                             clicks, "" if clicks == 1 else "s")
                 return game
             if game is None and not repair_bar_visible(self.win):
                 # Live: the player left the repair window (went to a cannon)
                 # mid-wait, and the re-click below landed on the cannon view.
                 log.info("Repair window closed; not clicking")
                 return WINDOW_CLOSED
-            if not reclicked and time.monotonic() - started > RECLICK_AFTER:
-                # Live: the click right after a game finishes is sometimes
-                # ignored outright; a second click opens it at once.
-                self.win.click(*button)
+            if time.monotonic() - last_click >= RECLICK_EVERY:
+                # Live: clicks right after a game finishes are sometimes
+                # ignored outright (once, two clicks over 6 s both were);
+                # keep clicking until the game switches in.
+                self.win.press(*button)
                 self.win.park_mouse()
-                reclicked = True
+                last_click, clicks = time.monotonic(), clicks + 1
         return None
 
     def repair_window_open(self):
@@ -148,7 +154,7 @@ class RepairBot:
         button = pending[0]
         if not self.repair_window_open():   # it may have closed since we looked
             return
-        self.win.click(*button)
+        self.win.press(*button)
         self.win.park_mouse()
         opened = self.wait_for_game(button)
         if opened is WINDOW_CLOSED:

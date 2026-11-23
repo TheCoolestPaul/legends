@@ -163,7 +163,7 @@ class RepairMiniGame:
     # -- control ----------------------------------------------------------
     def start(self):
         """Click this game's button and wait for it to open."""
-        self.win.click(*self.button)
+        self.win.press(*self.button)
         self.win.park_mouse()
         deadline = time.monotonic() + self.start_timeout
         while not timed_out(deadline):

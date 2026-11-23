@@ -570,7 +570,7 @@ def test_window_closing_while_waiting_stops_the_reclick(monkeypatch, snapshot_di
     frames = iter([cannon] * 99)                     # gone by the first look after the click
     monkeypatch.setattr(repair_bind, "wait",
                         lambda s: setattr(bot.win, "image", next(frames)))
-    monkeypatch.setattr(repair_bind, "RECLICK_AFTER", 0.0)
+    monkeypatch.setattr(repair_bind, "RECLICK_EVERY", 0.0)
     bot.tick()
     assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]   # the first click only
     assert bot.failed_starts == {}                               # not a failed start
@@ -698,3 +698,31 @@ def test_live_button_centres():
     measured = [(840, 1224), (1061, 1227), (1275, 1230), (1500, 1229), (1715, 1222)]
     for b, (x, y) in zip(BUTTONS, measured):
         assert abs(b.x - x) <= 3 and abs(b.y - y) <= 6
+
+
+def test_an_ignored_button_is_clicked_again_every_second(no_waiting, monkeypatch, snapshot_dir):
+    """Live: after plank sawing, two clicks on bracing over 6 s were both
+    ignored. Keep pressing the button about once a second until it opens."""
+    import types
+    import repair_bind
+    from repair_bind import RECLICK_EVERY
+    clock = types.SimpleNamespace(now=0.0)
+    monkeypatch.setattr(repair_bind, "time", types.SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(repair_bind, "timed_out", lambda d: clock.now > d)
+    monkeypatch.setattr(repair_bind, "wait", lambda s: setattr(clock, "now", clock.now + s))
+    bot = RepairBot(live("scrubbing_done"))
+    assert bot.wait_for_game(BUTTONS[2], seconds=4.05) is None
+    presses = clicks(bot.win)
+    assert presses == [bot.win.to_screen(*BUTTONS[2])] * len(presses)
+    assert len(presses) == int(4 / RECLICK_EVERY)        # 1 s, 2 s, 3 s, 4 s
+
+
+def test_press_hovers_before_it_clicks(monkeypatch):
+    """The game drops a click it didn't see the cursor over the button for."""
+    win = live("scrubbing_done")
+    monkeypatch.setattr(screen.time, "sleep", lambda s: win.actions.append(("sleep", s)))
+    screen.GameWindow.press(win, *BUTTONS[1])
+    at = win.to_screen(*BUTTONS[1])
+    assert win.actions == [("move", at), ("sleep", screen.PRESS_HOVER), ("down", at),
+                           ("sleep", screen.PRESS_HOLD), ("up", at),
+                           ("sleep", screen.PRESS_AFTER)]

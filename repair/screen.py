@@ -57,6 +57,12 @@ WINDOW_TITLES = (
 )
 
 PARK_FROM_TOP = 8    # ref px below the top of the game where the cursor rests
+# press(): menu buttons only react to a click the game saw while hovering.
+# A teleport-and-click (and parking straight after) can all fall inside one
+# lagging frame, and the click is lost. Give each phase a frame or two.
+PRESS_HOVER = 0.05   # seconds over the button before pressing
+PRESS_HOLD = 0.05    # seconds the button is held down
+PRESS_AFTER = 0.05   # seconds before the cursor moves on
 DRAG_STEP = 15       # ref px between cursor positions while dragging
 DRAG_DELAY = 0.008   # seconds between those positions (~1 per game frame)
 
@@ -485,6 +491,20 @@ class GameWindow:
         import pyautogui
         pyautogui.mouseUp()
 
+    def press(self, x, y):
+        """A deliberate click for menu buttons: hover, press, hold, release.
+
+        Slower than click() (~0.15 s) but survives the game's input lag.
+        """
+        self.move(x, y)
+        time.sleep(PRESS_HOVER)
+        self.mouse_down(x, y)
+        try:
+            time.sleep(PRESS_HOLD)
+        finally:
+            self.mouse_up(x, y)
+        time.sleep(PRESS_AFTER)
+
     def drag(self, path, step=DRAG_STEP, delay=DRAG_DELAY):
         """Hold the left button and move along ``path`` (ref points) smoothly.
 
@@ -549,6 +569,9 @@ class ImageWindow(GameWindow):
 
     def mouse_up(self, x, y):
         self.actions.append(("up", self.to_screen(x, y)))
+
+    def press(self, x, y):
+        self.actions.append(("click", self.to_screen(x, y)))
 
     def park_mouse(self):
         pass
