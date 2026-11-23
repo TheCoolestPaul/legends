@@ -199,3 +199,65 @@ def test_recipe_rows_by_name_or_number():
     import pytest
     with pytest.raises(ValueError):
         recipe_row("Swift Foot IX")
+
+
+# -- speed: checking against the prediction ---------------------------------------
+def test_quick_checks_agree_with_a_full_read():
+    t = table("board_midgame")
+    cols = t.read_columns()
+    t.look()
+    assert t.board_is(cols)
+    changed = [list(col) for col in cols]
+    changed[2][1] = ("red", 1)
+    assert not t.board_is(changed)
+    assert not t.board_is(cols[:7] + [[("red", 1)]])         # a piece that isn't there
+    assert t.hand_is((("green", 1), ("red", 1)), 0)
+    assert not t.hand_is((("red", 1), ("green", 1)), 0)
+
+
+def test_expected_board_and_pair_return_at_once():
+    import time
+    t = table("board_midgame")
+    cols = t.read_columns()
+    began = time.monotonic()
+    got, hand = t.wait_for(cols, (("green", 1), ("red", 1)), 0)
+    assert got == cols and hand == (("green", 1), ("red", 1), 0)
+    assert time.monotonic() - began < 0.4                    # no half-second settle
+
+
+def test_unexpected_board_falls_back_to_a_full_read(monkeypatch):
+    import brew_bot
+    monkeypatch.setattr(brew_bot, "MATCH_WAIT", 0.05)
+    monkeypatch.setattr(brew_bot, "STEADY", 0.05)
+    t = table("board_midgame")
+    real = t.read_columns()
+    wrong = [list(col) for col in real]
+    wrong[2][1] = ("red", 1)
+    got, hand = t.wait_for(wrong, (("green", 1), ("red", 1)), 0)
+    assert got == real                                       # what's really there
+
+
+# -- deeper search ------------------------------------------------------------------
+def test_unseen_pair_odds_add_up():
+    from brewing import pair_odds
+    odds = pair_odds({"red", "green", "blue", "purple"})
+    assert len(odds) == 10
+    assert abs(sum(p for _, p in odds) - 1) < 1e-9
+
+
+def test_deeper_search_still_takes_a_recipe_piece_when_it_can():
+    board = parse("""
+        .. .. .. .. .. p2 .. ..
+        .. .. .. .. .. p2 .. ..
+    """, needs={("purple", 3): 6})
+    pair = (("purple", 2), ("red", 1))
+    c, swapped = best_move(board, pair, (("red", 1), ("green", 1)),
+                           pool={"red", "green", "blue", "purple"})
+    board.drop(oriented(pair, swapped), c)
+    assert board.collected == 1
+
+
+def test_unmade_recipe_colour_comes_from_the_border():
+    """Live: Pincer Potion's grey Crab Soul (blue 6) was read as purple 6;
+    unmade icons are grey, the border says blue."""
+    assert table("pincer_start").read_recipe() == Counter({("blue", 6): 1})

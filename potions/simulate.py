@@ -23,15 +23,15 @@ RECIPES = {
 MAX_TURNS = 400
 
 
-def play(needs, colours, rng, evaluate=None):
-    """(won, turns) for one game."""
+def play(needs, colours, rng, evaluate=None, deep=False):
+    """(won, turns) for one game; ``deep`` also weighs the unseen pair."""
     board = Board(needs=Counter(needs))
 
     def deal():
         return (rng.choice(colours), 1), (rng.choice(colours), 1)
     pair, nxt = deal(), deal()
     for turn in range(1, MAX_TURNS + 1):
-        move = best_move(board, pair, nxt, evaluate=evaluate)
+        move = best_move(board, pair, nxt, evaluate=evaluate, pool=colours if deep else None)
         if move is None:
             return False, turn
         board.drop(oriented(pair, move[1]), move[0])
@@ -43,11 +43,11 @@ def play(needs, colours, rng, evaluate=None):
     return False, MAX_TURNS
 
 
-def report(games=10, seed=1, evaluate=None, recipes=RECIPES):
+def report(games=10, seed=1, evaluate=None, recipes=RECIPES, deep=False):
     rows = []
     for name, (needs, colours) in recipes.items():
         rng = random.Random(seed)
-        results = [play(needs, colours, rng, evaluate) for _ in range(games)]
+        results = [play(needs, colours, rng, evaluate, deep) for _ in range(games)]
         wins = [t for won, t in results if won]
         rows.append((name, len(wins), games, sum(wins) / len(wins) if wins else 0))
     return rows

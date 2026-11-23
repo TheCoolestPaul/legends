@@ -70,6 +70,22 @@ RECIPES = [
     "Lively Bucko Brew II",
 ]
 UNKNOWN = ("?", 0)                       # a piece that couldn't be read
+# Everything the reader looks at (board, hand row, next pair, recipe and its
+# check marks), captured once per look instead of once per cell.
+TABLE_REGION = (440, 60, 1680, 1220)
+# Recipe slots: an unmade ingredient's icon is drawn in grey, so its colour
+# comes from the hex border. Live, Pincer Potion's grey Crab Soul (blue 6)
+# matched purple 6 best. Median of the saturated pixels in a ring between
+# the icon and the rivets (ref px from the slot centre), measured Nov 2026:
+BORDER_RING = (42, 50)
+BORDER_COLOURS = {
+    "red": (129, 39, 43), "blue": (60, 88, 136), "green": (82, 102, 35),
+    "orange": (141, 81, 21), "purple": (120, 64, 108),
+    None: (195, 173, 126),               # bare parchment: no slot here
+}
+MIN_BORDER_PIXELS = 300                  # fewer coloured pixels: a gray border
+MATCH_WAIT = 1.5                         # s for the board to reach the prediction
+DROP_HOLD = 0.05                         # s the button is held to drop a pair
 PIECE_SCALE = 0.84                       # board pieces vs the ingredient chart
 INNER = (0.2, 0.8)                       # part of a chart hex compared (no corners)
 SEARCH = 8                               # ref px of slack around a cell centre
@@ -116,18 +132,44 @@ class PotionTable:
 
     def __init__(self, win):
         self.win = win
+        self._frame = None
+        self.hand_seen_at = None
+
+    # -- capture ----------------------------------------------------------------
+    def look(self):
+        """Capture the whole table once; reads until the next look use it.
+        (Live, a board read grabbed 72+ small regions one by one.)"""
+        want = self.win.region_to_screen(*TABLE_REGION)
+        self._frame = (want, self.win._grab_rect(want))
+
+    def _grab(self, left, top, width, height):
+        """Like win.grab, but cut from the last look() when it covers it."""
+        if self._frame is not None:
+            want = self.win.region_to_screen(left, top, width, height)
+            frame_rect, img = self._frame
+            x0, y0 = want.left - frame_rect.left, want.top - frame_rect.top
+            if (x0 >= 0 and y0 >= 0 and x0 + want.width <= frame_rect.width
+                    and y0 + want.height <= frame_rect.height):
+                return img[y0:y0 + want.height, x0:x0 + want.width]
+        return self.win.grab(left, top, width, height)
 
     # -- reading --------------------------------------------------------------
-    def piece_at(self, x, y):
-        """(piece, score) for the piece centred near ref (x, y); piece is
-        None when nothing there matches well."""
+    def _patch(self, x, y):
         tmpl = templates(round(self.win.scale, 3))
         th, tw = next(iter(tmpl.values())).shape[:2]
         s = self.win.scale
         half_w, half_h = tw / s / 2 + SEARCH, th / s / 2 + SEARCH
-        patch = np.ascontiguousarray(self.win.grab(round(x - half_w), round(y - half_h),
-                                                   round(2 * half_w), round(2 * half_h)))
+        patch = np.ascontiguousarray(self._grab(round(x - half_w), round(y - half_h),
+                                                round(2 * half_w), round(2 * half_h)))
         if patch.shape[0] < th or patch.shape[1] < tw:
+            return tmpl, None
+        return tmpl, patch
+
+    def piece_at(self, x, y):
+        """(piece, score) for the piece centred near ref (x, y); piece is
+        None when nothing there matches well."""
+        tmpl, patch = self._patch(x, y)
+        if patch is None:
             return None, 0.0
         best, best_score = None, -1.0
         for piece, t in tmpl.items():
@@ -135,6 +177,32 @@ class PotionTable:
             if score > best_score:
                 best, best_score = piece, score
         return (best if best_score >= MIN_SCORE else None), best_score
+
+    def is_piece(self, x, y, piece):
+        """Quick check: is ``piece`` at ref (x, y)? (one comparison, not 36)"""
+        tmpl, patch = self._patch(x, y)
+        if patch is None or piece not in tmpl:
+            return False
+        return float(cv2.matchTemplate(patch, tmpl[piece], cv2.TM_CCOEFF_NORMED).max()) >= MIN_SCORE
+
+    def board_is(self, cols):
+        """Quick check of the last look against an expected board: every
+        expected piece where it should be and nothing just above each column."""
+        for c, col in enumerate(cols):
+            for k, piece in enumerate(col):
+                if piece == UNKNOWN:
+                    if self.piece_at(*cell_centre(c, k))[0] is None:
+                        return False
+                elif not self.is_piece(*cell_centre(c, k), piece):
+                    return False
+            if len(col) < BOARD_ROWS and self.piece_at(*cell_centre(c, len(col)))[0] is not None:
+                return False
+        return True
+
+    def hand_is(self, pair, c):
+        """Quick check of the last look: is ``pair`` in hand over c, c+1?"""
+        return (self.is_piece(*cell_centre(c, HAND_ROW), pair[0])
+                and self.is_piece(*cell_centre(c + 1, HAND_ROW), pair[1]))
 
     def read_columns(self):
         """Pieces in each column, bottom first.
@@ -145,6 +213,7 @@ class PotionTable:
         column cut short at one bad cell hid two pieces and the bot filled
         it to the top. A column ends after two empty cells in a row.
         """
+        self.look()
         cols = []
         for c in range(COLUMNS):
             col, gap = [], []
@@ -163,6 +232,7 @@ class PotionTable:
 
     def read_hand(self):
         """(left piece, right piece, left column) of the pair in hand, or None."""
+        self.look()
         held = []
         for c in range(COLUMNS):
             piece, _ = self.piece_at(*cell_centre(c, HAND_ROW))
@@ -173,24 +243,58 @@ class PotionTable:
         return None
 
     def read_next(self):
+        """The "next" pair shown top left, or None."""
+        self.look()
         pair = tuple(self.piece_at(*p)[0] for p in NEXT_PAIR)
         return pair if None not in pair else None
 
     def read_recipe(self):
         """Counter of (colour, tier) the recipe still needs: slots shown in
         the list without a check mark beside them."""
+        self.look()
         needs = Counter()
         for i in range(RECIPE_SLOTS):
-            piece, _ = self.piece_at(*recipe_centre(i))
+            piece = self.recipe_piece(i)
             if piece is not None and not self.slot_filled(i):
                 needs[piece] += 1
         return needs
+
+    def recipe_piece(self, i):
+        """The ingredient in recipe slot ``i``, or None. The icon gives the
+        tier; the border gives the colour (unmade icons are grey)."""
+        x, y = recipe_centre(i)
+        piece, _ = self.piece_at(x, y)
+        if piece is None:
+            return None
+        colour = self.border_colour(x, y)
+        if colour is None or colour == piece[0]:
+            return piece
+        tmpl, patch = self._patch(x, y)
+        tiers = [(float(cv2.matchTemplate(patch, t, cv2.TM_CCOEFF_NORMED).max()), key)
+                 for key, t in tmpl.items() if key[0] == colour]
+        return max(tiers)[1] if tiers else piece
+
+    def border_colour(self, x, y):
+        """Colour of the hex border around ref (x, y): a BORDER_COLOURS key,
+        or None when it can't tell (a gray border, or no slot)."""
+        s = self.win.scale
+        r1 = BORDER_RING[1]
+        img = self._grab(x - r1, y - r1, 2 * r1 + 1, 2 * r1 + 1).astype(int)
+        h, w = img.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w]
+        d = np.hypot(xx - w / 2, yy - h / 2) / s
+        px = img[(d >= BORDER_RING[0]) & (d <= BORDER_RING[1])]
+        px = px[px.max(axis=1) - px.min(axis=1) > 40]
+        if len(px) < MIN_BORDER_PIXELS * s * s:
+            return None
+        med = np.median(px, axis=0)
+        return min(BORDER_COLOURS, key=lambda k: float(np.sum((med - BORDER_COLOURS[k]) ** 2)))
 
     def slot_filled(self, i):
         """A filled recipe slot has a dark check mark beside it (live: 24%
         of that patch is dark when checked, ~6% when not)."""
         _, y = recipe_centre(i)
-        patch = self.win.grab(*CHECK_REGION_X, y - CHECK_HALF_H, CHECK_REGION_W, 2 * CHECK_HALF_H)
+        patch = self._grab(*CHECK_REGION_X, y - CHECK_HALF_H, CHECK_REGION_W, 2 * CHECK_HALF_H)
         return float((patch.mean(axis=-1) < 120).mean()) >= CHECK_DARK
 
     def brewed(self):
@@ -224,17 +328,23 @@ class PotionTable:
         return score >= 0.8
 
     # -- acting ---------------------------------------------------------------
-    def hold_over(self, c):
+    def hold_over(self, c, pair=None):
         """Move the pair in hand over columns c, c+1; returns the hand once
-        it is there, or None."""
+        it is there, or None. Knowing ``pair`` makes each check quick."""
         self.win.move(aim_x(c), AIM_Y)
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             check_stop()
-            hand = self.read_hand()
-            if hand and hand[2] == c:
-                return hand
-            wait(0.05)
+            if pair is not None:
+                self.look()
+                for held in (pair, pair[::-1]):
+                    if self.hand_is(held, c):
+                        return held[0], held[1], c
+            else:
+                hand = self.read_hand()
+                if hand and hand[2] == c:
+                    return hand
+            wait(0.02)
         return None
 
     def rotate(self, hand):
@@ -243,20 +353,61 @@ class PotionTable:
         self.win.right_click(aim_x(c), AIM_Y)
         deadline = time.monotonic() + 1.5
         while time.monotonic() < deadline:
-            new = self.read_hand()
-            if new and (new[0], new[1]) == (right, left):
-                return new
-            wait(0.05)
+            self.look()
+            if self.hand_is((right, left), c):
+                return right, left, c
+            wait(0.02)
         return None
 
     def drop(self, c):
-        self.win.press(aim_x(c), AIM_Y)
+        """Drop the pair. The cursor is already resting over the column (the
+        pair followed it there), so a short press is enough; menu buttons
+        need the full hover-and-hold press()."""
+        x, y = aim_x(c), AIM_Y
+        self.win.move(x, y)
+        self.win.mouse_down(x, y)
+        try:
+            time.sleep(DROP_HOLD)
+        finally:
+            self.win.mouse_up(x, y)
+
+    def wait_for(self, expected_cols, expected_pair, c, done=False):
+        """After a drop: wait until ``expected_pair`` is in hand over c and
+        the board matches ``expected_cols``, then return (cols, hand) at
+        once. Live, the next pair only shows once merges have finished, so
+        a matching board is a finished one. Anything unexpected (or no known
+        next pair) falls back to wait_settled(). ``done``: this drop should
+        finish the potion, so watch for the Congratulations dialog."""
+        if expected_pair is None:
+            return self.wait_settled()
+        deadline = time.monotonic() + TURN_TIMEOUT
+        self.hand_seen_at = None
+        while time.monotonic() < deadline:
+            check_stop()
+            self.look()
+            now = time.monotonic()
+            if self.hand_is(expected_pair, c):
+                if self.hand_seen_at is None:
+                    self.hand_seen_at = now
+                if self.board_is(expected_cols):
+                    return expected_cols, (expected_pair[0], expected_pair[1], c)
+                if now - self.hand_seen_at > MATCH_WAIT:
+                    break                       # not the board we expected
+            else:
+                waited = now - deadline + TURN_TIMEOUT
+                if (done or waited > MATCH_WAIT) and (self.game_over() or self.brewed()):
+                    return None, None
+                if waited > 2 * MATCH_WAIT and self.read_hand():
+                    break                       # a pair, but not the one expected
+            wait(0.02)
+        return self.wait_settled()
 
     def wait_settled(self):
         """Wait for a pair in hand and a board that has stopped changing.
         Returns (columns, hand), or (None, None) on timeout or game over."""
         deadline = time.monotonic() + TURN_TIMEOUT
         last, since = None, None
+        self.hand_seen_at = None
         while time.monotonic() < deadline:
             check_stop()
             # Live: after "Game Over" the last pair stays drawn in hand, so
@@ -264,6 +415,8 @@ class PotionTable:
             if self.game_over() or self.brewed():
                 return None, None
             hand = self.read_hand()
+            if hand and self.hand_seen_at is None:
+                self.hand_seen_at = time.monotonic()
             cols = self.read_columns() if hand else None
             now = time.monotonic()
             if hand and cols == last and last is not None:
@@ -287,6 +440,7 @@ class Brewer:
         self.mismatches = 0
         self.result = None
         self.turns = 0
+        self.pool = {"red", "green", "blue"}   # colours being dealt
 
     def play(self):
         """Play until the potion is done or there's no pair to place."""
@@ -300,18 +454,28 @@ class Brewer:
         while hand:
             check_stop()
             snapshots.take_requested(self.win, "potions")
+            t0 = time.monotonic()
             nxt = t.read_next()
             board = Board(cols, needs)
             pair = (hand[0], hand[1])
-            move = best_move(board, pair, nxt)
+            # Every recipe deals red, green and blue tier-1 pieces; bigger
+            # ones add purple (live, Nov 2026). Weigh the unseen pair after
+            # next against every colour seen so far: in simulation this cut
+            # tier-4 recipes from ~80 to ~45 turns (median).
+            for col in cols:
+                self.pool.update(c for c, _ in col if c != UNKNOWN[0])
+            self.pool.update(c for c, _ in pair + (nxt or ()))
+            move = best_move(board, pair, nxt, pool=self.pool)
+            t1 = time.monotonic()
             if move is None:
                 log.warning("No room for %s; the board is full", pair)
                 break
             c, swapped = move
             want = oriented(pair, swapped)
             predicted = board.copy()
-            predicted.drop(want, c)
-            held = t.hold_over(c)
+            predicted.pieces_merged = predicted.drop(want, c)
+            held = t.hold_over(c, pair)
+            t2 = time.monotonic()
             if held is None:
                 log.warning("The pair didn't follow the cursor to column %d", c)
                 snapshots.save(self.win, "hand_lost", "potions")
@@ -322,11 +486,19 @@ class Brewer:
                     log.warning("Rotate didn't take; re-reading")
                     cols, hand = t.wait_settled()
                     continue
+            t3 = time.monotonic()
             log.debug("drop %s on columns %d-%d", want, c, c + 1)
             t.drop(c)
+            t4 = time.monotonic()
             turns += 1
             self.turns = turns
-            cols, hand = t.wait_settled()
+            done = not any(n > 0 for n in predicted.needs.values())
+            cols, hand = t.wait_for(predicted.cols, nxt, c, done)
+            t5 = time.monotonic()
+            log.debug("timing: think %.2f aim %.2f rotate %.2f press %.2f hand after %.2f "
+                      "settled after %.2f (merges predicted: %s)", t1 - t0, t2 - t1, t3 - t2,
+                      t4 - t3, (t.hand_seen_at or t5) - t4, t5 - t4,
+                      predicted.pieces_merged if hasattr(predicted, "pieces_merged") else "?")
             if cols is None:
                 if t.brewed():
                     log.info("Potion brewed in %d turns.", turns)

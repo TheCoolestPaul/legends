@@ -218,22 +218,71 @@ def _dropped(board, pair, move):
     return b
 
 
-def best_move(board, pair, next_pair=None, evaluate=None):
-    """(column, swapped) for ``pair``, looking one pair ahead when known.
-    None if nothing fits. ``evaluate`` overrides the board scoring."""
+BEAM = 4          # best first and second moves looked at past the visible pairs
+NO_ROOM = 10_000  # penalty when a pair has nowhere to go
+
+
+def pair_odds(pool):
+    """[(pair, probability)] for an unseen pair: two tier-1 pieces, colours
+    uniform from ``pool`` (as dealt live). Order doesn't matter, since every
+    pair can be rotated."""
+    pool = sorted(pool)
+    n = len(pool)
+    return [(((a, 1), (b, 1)), (1 if a == b else 2) / (n * n))
+            for i, a in enumerate(pool) for b in pool[i:]]
+
+
+def _finished(board):
+    return not any(n > 0 for n in board.needs.values()) and board.collected > 0
+
+
+def best_move(board, pair, next_pair=None, evaluate=None, pool=None, beam=BEAM):
+    """(column, swapped) for ``pair``, or None if nothing fits.
+
+    Looks at every move for ``pair`` and, when ``next_pair`` is known, every
+    reply with it. With the colour ``pool`` too, the ``beam`` best of those
+    are also weighed against every pair that could come after: the average,
+    over its odds, of the best move for it. ``evaluate`` overrides the
+    board scoring.
+    """
     evaluate = evaluate or globals()["evaluate"]
-    best, best_score = None, None
+    lines = []                        # (score, move, [(score, board after next pair)])
     for move in moves(pair):
         if not board.can_drop(move[0]):
             continue
         after = _dropped(board, pair, move)
-        score = evaluate(after)
-        if next_pair is not None:
-            follow = [evaluate(_dropped(after, next_pair, m)) for m in moves(next_pair)
-                      if after.can_drop(m[0])]
-            score = max(follow) if follow else score - 10_000
-        if best_score is None or score > best_score:
-            best, best_score = move, score
+        if next_pair is None or _finished(after):
+            lines.append((evaluate(after), move, []))
+            continue
+        follows = sorted(((evaluate(b), b) for b in
+                          (_dropped(after, next_pair, m) for m in moves(next_pair)
+                           if after.can_drop(m[0]))), key=lambda f: -f[0])
+        if follows:
+            lines.append((follows[0][0], move, follows))
+        else:
+            lines.append((evaluate(after) - NO_ROOM, move, []))
+    if not lines:
+        return None
+    lines.sort(key=lambda line: -line[0])
+    if pool is None or next_pair is None:
+        return lines[0][1]
+    odds = pair_odds(pool)
+
+    def outlook(b):
+        """Expected score of ``b`` once the unseen pair is played well."""
+        if _finished(b):
+            return evaluate(b)
+        total = 0.0
+        for third, p in odds:
+            options = [evaluate(_dropped(b, third, m)) for m in moves(third) if b.can_drop(m[0])]
+            total += p * (max(options) if options else evaluate(b) - NO_ROOM)
+        return total
+
+    best, best_value = None, None
+    for score, move, follows in lines[:beam]:
+        value = max((outlook(b) for _, b in follows[:beam]), default=score)
+        if best_value is None or value > best_value:
+            best, best_value = move, value
     return best
 
 
