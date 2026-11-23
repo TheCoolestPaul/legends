@@ -437,6 +437,14 @@ def test_open_hole_found_not_the_streaming_patch():
     assert [(p.x, p.y) for p in leaks] == [(923, 649)]
 
 
+def test_hole_half_hidden_by_its_jet_is_found():
+    """Live: a big jet covered the lower half of its hole, leaving a black
+    cap too short for the size check; the leak ran all game, never clicked."""
+    from hull_patching import HullPatching
+    leaks = HullPatching(live("patching_hole_over_jet")).find_leaks()
+    assert (1400, 640) in [(p.x, p.y) for p in leaks]
+
+
 # -- bilge pumping --------------------------------------------------------------
 def gauge_playback(monkeypatch, fixture="bilge_gauge"):
     """Replay a recorded stretch of the gauge on a fake clock. Returns (game,
