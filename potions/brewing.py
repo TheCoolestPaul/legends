@@ -42,6 +42,13 @@ def height_key(cell):
     return (k - 0.5 * (c % 2), c)
 
 
+ROWS = HEIGHT + 1     # rows a piece can occupy, counting one past a full column
+# NEIGHBOURS[c][k]: the on-board cells touching (c, k), worked out once; the
+# simulation looks them up millions of times per potion.
+NEIGHBOURS = [[tuple((c2, k2) for c2, k2 in neighbours(c, k) if 0 <= k2 < ROWS)
+               for k in range(ROWS)] for c in range(COLUMNS)]
+
+
 class Board:
     """Columns of pieces, bottom first, plus what the recipe still needs."""
 
@@ -74,60 +81,91 @@ class Board:
         self.cols[c].append(pair[0])
         self.cols[c + 1].append(pair[1])
         new = {(c, len(self.cols[c]) - 1), (c + 1, len(self.cols[c + 1]) - 1)}
-        self._collect()
-        return self.resolve(new)
+        moved = self._collect((c, c + 1))
+        return self.resolve(new, new | _cells_from(self.cols, moved))
 
-    def _collect(self):
-        """Pull pieces the recipe still needs off the board."""
-        for c in range(COLUMNS):
+    def _collect(self, columns=None):
+        """Pull pieces the recipe still needs off the board (only ``columns``
+        can hold one when given: a settled board never does). Returns
+        {column: lowest row that changed} for the columns that did."""
+        needs, changed = self.needs, {}
+        if not needs:
+            return changed
+        # Left to right: when one merge makes two pieces the recipe wants just
+        # one of, which one goes decides what's left on the board.
+        for c in (range(COLUMNS) if columns is None else sorted(columns)):
+            col = self.cols[c]
+            if not any(needs.get(piece, 0) > 0 for piece in col):
+                continue
             kept = []
-            for piece in self.cols[c]:
-                if self.needs.get(piece, 0) > 0:
-                    self.needs[piece] -= 1
+            for k, piece in enumerate(col):
+                if needs.get(piece, 0) > 0:
+                    needs[piece] -= 1
                     self.collected += 1
+                    changed.setdefault(c, k)
                 else:
                     kept.append(piece)
             self.cols[c] = kept
+        return changed
 
-    def groups(self):
-        """Groups of 3+ touching pieces of the same colour and tier."""
+    def groups(self, start=None):
+        """Groups of 3+ touching pieces of the same colour and tier. With
+        ``start``, only groups containing one of those cells: on a settled
+        board only pieces that just landed or moved can make a new group."""
+        cols = self.cols
+        if start is None:
+            start = [(c, k) for c in range(COLUMNS) for k in range(len(cols[c]))]
         seen, found = set(), []
-        for c in range(COLUMNS):
-            for k, piece in enumerate(self.cols[c]):
-                if (c, k) in seen or piece[0] == "?":
-                    continue            # unreadable pieces never merge
-                group, todo = [], [(c, k)]
-                seen.add((c, k))
-                while todo:
-                    cell = todo.pop()
-                    group.append(cell)
-                    for n in neighbours(*cell):
-                        if n not in seen and self.at(*n) == piece:
+        for c, k in start:
+            if (c, k) in seen or k >= len(cols[c]):
+                continue
+            piece = cols[c][k]
+            if piece[0] == "?":
+                continue            # unreadable pieces never merge
+            group, todo = [], [(c, k)]
+            seen.add((c, k))
+            while todo:
+                cell = todo.pop()
+                group.append(cell)
+                for n in NEIGHBOURS[cell[0]][cell[1]]:
+                    if n not in seen:
+                        col = cols[n[0]]
+                        if n[1] < len(col) and col[n[1]] == piece:
                             seen.add(n)
                             todo.append(n)
-                if len(group) >= 3:
-                    found.append((piece, group))
+            if len(group) >= 3:
+                found.append((piece, group))
         return found
 
-    def resolve(self, new=()):
+    def resolve(self, new=(), start=None):
         """Merge every group (and the chains that follow). ``new`` holds the
-        cells of the pieces just dropped."""
+        cells of the pieces just dropped; ``start`` the cells that changed
+        (None: look everywhere)."""
         merges = 0
         while True:
-            groups = self.groups()
+            groups = self.groups(start)
             if not groups:
                 return merges
             grid = [list(col) for col in self.cols]
+            lowest = {}                      # column -> lowest row that changed
             for (colour, tier), group in groups:
                 kept = merge_cells(group, new)
                 for c, k in group:
                     grid[c][k] = None
+                    lowest[c] = min(lowest.get(c, k), k)
                 for c, k in kept:
                     grid[c][k] = (colour, min(tier + 1, MAX_TIER))
                 merges += 1
             self.cols = [[p for p in col if p is not None] for col in grid]
             new = ()
-            self._collect()
+            for c, k in self._collect(list(lowest)).items():
+                lowest[c] = min(lowest.get(c, k), k)
+            start = _cells_from(self.cols, lowest)
+
+
+def _cells_from(cols, lowest):
+    """Every cell at or above row lowest[c] in each column c listed."""
+    return {(c, k) for c, k0 in lowest.items() for k in range(k0, len(cols[c]))}
 
 
 def merge_cells(group, new=()):
@@ -184,28 +222,32 @@ def evaluate(board, w=None):
     score = w["collected"] * board.collected
     wanted = {}
     for (colour, tier), n in board.needs.items():
-        if n > 0:
-            wanted[colour] = max(wanted.get(colour, 0), tier)
-    pieces = 0
+        if n > 0 and tier > wanted.get(colour, 0):
+            wanted[colour] = tier
+    material, clutter = w["material"], w["clutter"]
+    pair, same_colour, mixed = w["pair"], w["same_colour"], w["mixed"]
+    cols = board.cols
+    heights = [len(col) for col in cols]
+    pieces = sum(heights)
     for c in range(COLUMNS):
-        for k, (colour, tier) in enumerate(board.cols[c]):
-            pieces += 1
+        col, table = cols[c], NEIGHBOURS[c]
+        for k, piece in enumerate(col):
+            colour, tier = piece
             target = wanted.get(colour)
-            if target and tier < target:
-                score += w["material"] * 3 ** (tier - 1)
-            elif not target:
-                score -= w["clutter"]
-            for n in neighbours(c, k):
-                other = board.at(*n)
-                if other is None:
-                    continue
-                if other == (colour, tier):
-                    score += w["pair"]
-                elif other[0] == colour:
-                    score += w["same_colour"]
-                else:
-                    score -= w["mixed"]
-    heights = board.heights()
+            if target:
+                if tier < target:
+                    score += material * 3 ** (tier - 1)
+            else:
+                score -= clutter
+            for c2, k2 in table[k]:
+                if k2 < heights[c2]:
+                    other = cols[c2][k2]
+                    if other == piece:
+                        score += pair
+                    elif other[0] == colour:
+                        score += same_colour
+                    else:
+                        score -= mixed
     score -= w["height_sq"] * sum(h * h for h in heights)
     score -= w["danger"] * sum(1 for c, h in enumerate(heights) if h >= capacity(c) - 1)
     score -= w["pieces_sq"] * pieces * pieces

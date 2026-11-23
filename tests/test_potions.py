@@ -268,3 +268,26 @@ def test_grey_recipe_icons_with_weak_matches_still_count():
     0.76, under the board threshold, and the recipe lost a slot."""
     assert table("pantano_start").read_recipe() == Counter(
         {("red", 5): 1, ("blue", 5): 1, ("green", 5): 1, ("green", 4): 1})
+
+
+def test_searching_only_changed_cells_matches_a_full_search():
+    """The fast core looks for merges only around pieces that moved; on a
+    settled board that must find exactly what a whole-board search finds."""
+    import random
+    from brewing import moves
+    rng = random.Random(7)
+    colours = ("red", "green", "blue", "purple")
+    fast = Board(needs={("blue", 3): 2, ("red", 4): 1})
+    for _ in range(300):
+        pair = ((rng.choice(colours), 1), (rng.choice(colours), 1))
+        options = [m for m in moves(pair) if fast.can_drop(m[0])]
+        if not options:
+            break
+        c, swapped = rng.choice(options)
+        full = fast.copy()
+        fast.drop(oriented(pair, swapped), c)
+        full.cols[c].append(oriented(pair, swapped)[0])
+        full.cols[c + 1].append(oriented(pair, swapped)[1])
+        full._collect()
+        full.resolve(new={(c, len(full.cols[c]) - 1), (c + 1, len(full.cols[c + 1]) - 1)})
+        assert fast.cols == full.cols and fast.collected == full.collected
