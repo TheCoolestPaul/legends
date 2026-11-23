@@ -531,6 +531,20 @@ class GameWindow:
         finally:
             self.mouse_up(*path[-1])
 
+    def right_click(self, x, y):
+        """A deliberate right click (potions: rotate the pair in hand)."""
+        import pyautogui
+        point = self._input_target(x, y)
+        if point:
+            pyautogui.moveTo(*point)
+            time.sleep(PRESS_HOVER)
+            pyautogui.mouseDown(*point, button="right")
+            try:
+                time.sleep(PRESS_HOLD)
+            finally:
+                pyautogui.mouseUp(button="right")
+            time.sleep(PRESS_AFTER)
+
     def park_mouse(self):
         """Move the cursor out of the way: top centre of the game, just below
         the edge. (Left centre sat over the crew list, and a lagged click
@@ -578,6 +592,9 @@ class ImageWindow(GameWindow):
 
     def press(self, x, y):
         self.actions.append(("click", self.to_screen(x, y)))
+
+    def right_click(self, x, y):
+        self.actions.append(("right", self.to_screen(x, y)))
 
     def park_mouse(self):
         pass
