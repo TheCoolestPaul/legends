@@ -98,6 +98,10 @@ MIN_SCORE = 0.8                          # below this a cell is empty
 STEADY = 0.5
 TURN_TIMEOUT = 12.0                      # seconds to wait for the next pair
 AIM_Y = ROW0_Y[0] - 4 * ROW_PITCH        # cursor height while aiming (mid board)
+# Recipes are normally judged by a simulated plan (planner.py). If planning
+# fails, fall back to this: every tier-3 and tier-4 recipe won in simulation;
+# tier 5 depends on the recipe and tier 6 (Pincer Potion) won ~25%.
+MAX_TIER_PLAYED = 4
 
 
 def cell_centre(c, k):
@@ -437,13 +441,43 @@ def describe(cols):
 
 
 class Brewer:
-    def __init__(self, win):
+    def __init__(self, win, any_tier=False):
         self.win = win
         self.table = PotionTable(win)
         self.mismatches = 0
         self.result = None
         self.turns = 0
         self.pool = {"red", "green", "blue"}   # colours being dealt
+        self.any_tier = any_tier
+        self.strategy, self.evaluate = "standard", None
+
+    def choose_plan(self, needs):
+        """Pick a strategy for this recipe from a simulated plan (planner.py)
+        and decide whether to play it. False: skip it. If planning fails, fall
+        back to a plain tier limit."""
+        if not needs:
+            return True                      # recipe unreadable: just play
+        try:
+            import planner
+            from brewing import scorer
+            p = planner.plan(needs)
+            self.strategy = p["strategy"]
+            self.evaluate = scorer(self.strategy, needs, planner.POOL)
+        except Exception:
+            log.exception("Couldn't plan this recipe; using the tier %d limit", MAX_TIER_PLAYED)
+            top = max(k for _, k in needs)
+            if top > MAX_TIER_PLAYED and not self.any_tier:
+                log.warning("This recipe needs a tier %d ingredient; skipping it (--any-tier "
+                            "plays it anyway).", top)
+                return False
+            return True
+        log.info("Plan: %s strategy, simulated %.0f%% wins, median %s turns.",
+                 self.strategy, 100 * p["win"], p["median_turns"])
+        if p["win"] < planner.MIN_WIN and not self.any_tier:
+            log.warning("Skipping this recipe: simulated, the bot wins only %.0f%% of the time "
+                        "(--any-tier plays it anyway).", 100 * p["win"])
+            return False
+        return True
 
     def play(self):
         """Play until the potion is done or there's no pair to place."""
@@ -452,6 +486,15 @@ class Brewer:
         needs = t.read_recipe()
         log.info("Recipe needs: %s", ", ".join("%d x %s %d" % (n, c, k)
                                                for (c, k), n in sorted(needs.items())) or "?")
+        if not needs and not t.read_hand():
+            # Live: started mid sea battle, the bot waited, then parked the
+            # cursor on the player. With no recipe and no pair, touch nothing.
+            log.warning("No potion board on screen; nothing to do.")
+            self.result = "no table"
+            return
+        if not self.choose_plan(needs):
+            self.result = "too hard"
+            return
         cols, hand = t.wait_settled()
         turns = 0
         while hand:
@@ -468,7 +511,7 @@ class Brewer:
             for col in cols:
                 self.pool.update(c for c, _ in col if c != UNKNOWN[0])
             self.pool.update(c for c, _ in pair + (nxt or ()))
-            move = best_move(board, pair, nxt, pool=self.pool)
+            move = best_move(board, pair, nxt, pool=self.pool, evaluate=self.evaluate)
             t1 = time.monotonic()
             if move is None:
                 log.warning("No room for %s; the board is full", pair)
@@ -529,7 +572,8 @@ class Brewer:
             needs = t.read_recipe()
             snapshots.record(self.win, "potions", {"columns": cols, "needs": [
                 [c, k, n] for (c, k), n in needs.items() if n > 0]})
-        self.win.park_mouse()
+        if turns:
+            self.win.park_mouse()
         log.info("Stopped after %d turns (%d prediction mismatches).", turns, self.mismatches)
         snapshots.save(self.win, "potion_end", "potions", force=True)
 
@@ -549,7 +593,7 @@ def single_instance():
     return lock
 
 
-def brew_loop(win, once=False):
+def brew_loop(win, once=False, any_tier=False):
     """Brew the open potion, then press "Brew Again" and keep going until
     stopped, a game is lost, or the table isn't in a playable state."""
     made = 0
@@ -561,7 +605,7 @@ def brew_loop(win, once=False):
             log.warning("Couldn't start a potion from the finished-potion dialog.")
             return
     while True:
-        brewer = Brewer(win)
+        brewer = Brewer(win, any_tier)
         began = time.monotonic()
         brewer.play()
         if brewer.result != "brewed":
@@ -666,7 +710,7 @@ def open_recipe(win, row, timeout=10.0):
     return False
 
 
-def brew_recipes(win, recipes, count=1):
+def brew_recipes(win, recipes, count=1, any_tier=False):
     """Brew each of ``recipes`` (names or list rows) ``count`` times."""
     summary = []
     for recipe in recipes:
@@ -680,7 +724,7 @@ def brew_recipes(win, recipes, count=1):
             if not opened:
                 summary.append((name, "didn't open", 0, 0))
                 break
-            brewer = Brewer(win)
+            brewer = Brewer(win, any_tier)
             began = time.monotonic()
             brewer.play()
             took = time.monotonic() - began
@@ -701,6 +745,8 @@ def main():
     parser.add_argument("--recipes", help="comma-separated recipe names or list rows to "
                         "brew in turn, e.g. \"Deadeye I, Boom Brew I\" or 7,8")
     parser.add_argument("--count", type=int, default=1, help="potions of each recipe (with --recipes)")
+    parser.add_argument("--any-tier", action="store_true",
+                        help="also play recipes the plan expects to lose often")
     parser.add_argument("--record", action="store_true", help="save frames to debug_frames/")
     parser.add_argument("--debug", action="store_true", help="verbose logging")
     args = parser.parse_args()
@@ -714,9 +760,9 @@ def main():
         sys.exit(1)
     with live_session(hotkeys=session_hotkeys(), debug=args.debug):
         if recipes:
-            brew_recipes(GameWindow(), recipes, args.count)
+            brew_recipes(GameWindow(), recipes, args.count, args.any_tier)
         else:
-            brew_loop(GameWindow(), once=args.once)
+            brew_loop(GameWindow(), once=args.once, any_tier=args.any_tier)
 
 
 if __name__ == "__main__":

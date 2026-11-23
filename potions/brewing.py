@@ -254,6 +254,53 @@ def evaluate(board, w=None):
     return score
 
 
+# -- strategies ----------------------------------------------------------------
+# "standard" is evaluate() as is. "lanes" also gives each colour a home band of
+# columns (needed colours in the middle at twice a clutter colour's width,
+# clutter colours at the edges) and costs a piece LANE_PENALTY per column away
+# from its band's centre. Simulated on 32 fresh deals: Pantano Silver Spirit
+# III (red, blue, green 5 + green 4) 41% -> 75% wins, but simpler tier-5
+# recipes a little worse and Pincer Potion (blue 6) no better; potions/
+# planner.py measures which one suits each recipe.
+STRATEGIES = ("standard", "lanes")
+LANE_PENALTY = 2.0
+
+
+def lane_centres(needs, pool):
+    """Colour -> preferred column (a float) for the "lanes" strategy."""
+    wanted = sorted({colour for (colour, _), n in needs.items() if n > 0})
+    clutter = sorted(set(pool) - set(wanted))
+    half = (len(clutter) + 1) // 2
+    order = ([(c, 1) for c in clutter[:half]] + [(c, 2) for c in wanted]
+             + [(c, 1) for c in clutter[half:]])
+    total = sum(width for _, width in order)
+    centres, x = {}, 0.0
+    for colour, width in order:
+        span = COLUMNS * width / total
+        centres[colour] = x + span / 2 - 0.5
+        x += span
+    return centres
+
+
+def scorer(strategy, needs, pool):
+    """The board scoring function for ``strategy`` on this recipe."""
+    if strategy == "standard":
+        return evaluate
+    if strategy != "lanes":
+        raise ValueError("unknown strategy %r" % strategy)
+    centres = lane_centres(needs, pool)
+
+    def lanes(board):
+        score = evaluate(board)
+        for c, col in enumerate(board.cols):
+            for colour, _ in col:
+                centre = centres.get(colour)
+                if centre is not None:
+                    score -= LANE_PENALTY * abs(c - centre)
+        return score
+    return lanes
+
+
 def _dropped(board, pair, move):
     b = board.copy()
     b.drop(oriented(pair, move[1]), move[0])

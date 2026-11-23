@@ -12,3 +12,6 @@ matches.png
 
 # Frames saved by the repair bots (F9, --record, failures)
 debug_frames/
+
+# Simulated plans the potion bot caches per recipe
+potions/plans.json

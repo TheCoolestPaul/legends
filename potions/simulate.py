@@ -10,7 +10,7 @@ import sys
 import time
 from collections import Counter
 
-from brewing import Board, best_move, capacity, oriented
+from brewing import Board, best_move, capacity, oriented, scorer
 
 RGB = ("red", "green", "blue")
 RGBP = RGB + ("purple",)
@@ -23,8 +23,11 @@ RECIPES = {
 MAX_TURNS = 400
 
 
-def play(needs, colours, rng, evaluate=None, deep=False):
-    """(won, turns) for one game; ``deep`` also weighs the unseen pair."""
+def play(needs, colours, rng, evaluate=None, deep=False, strategy=None):
+    """(won, turns) for one game; ``deep`` also weighs the unseen pair;
+    ``strategy`` picks a brewing.STRATEGIES scoring for this recipe."""
+    if strategy is not None:
+        evaluate = scorer(strategy, needs, colours)
     board = Board(needs=Counter(needs))
 
     def deal():

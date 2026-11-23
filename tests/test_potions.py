@@ -291,3 +291,105 @@ def test_searching_only_changed_cells_matches_a_full_search():
         full._collect()
         full.resolve(new={(c, len(full.cols[c]) - 1), (c + 1, len(full.cols[c + 1]) - 1)})
         assert fast.cols == full.cols and fast.collected == full.collected
+
+
+# -- strategies and the per-recipe planner ----------------------------------------
+def test_lanes_put_needed_colours_in_the_middle():
+    from brewing import lane_centres
+    centres = lane_centres({("blue", 6): 1}, ("red", "green", "blue", "purple"))
+    assert 2.5 < centres["blue"] < 4.5                     # the middle of 8 columns
+    assert min(centres.values()) < 1 and max(centres.values()) > 6
+
+
+def test_lanes_cost_pieces_away_from_their_colour():
+    from brewing import evaluate, scorer
+    needs = {("blue", 6): 1}
+    score = scorer("lanes", needs, ("red", "green", "blue", "purple"))
+    home = Board([[], [], [], [("blue", 1)], [], [], [], []], needs)
+    away = Board([[("blue", 1)], [], [], [], [], [], [], []], needs)
+    assert evaluate(home) - score(home) < evaluate(away) - score(away)
+    assert scorer("standard", needs, ()) is evaluate
+
+
+def test_planner_keeps_the_strategy_that_wins_most(monkeypatch, tmp_path):
+    import planner
+    monkeypatch.setattr(planner, "PLANS", tmp_path / "plans.json")
+    calls = []
+
+    def fake_assess(needs, pool, games):
+        calls.append(needs)
+        return {"standard": {"won": 5, "games": 16, "median_turns": 90},
+                "lanes": {"won": 12, "games": 16, "median_turns": 100}}
+    monkeypatch.setattr(planner, "assess", fake_assess)
+    needs = Counter({("red", 5): 1, ("blue", 5): 1})
+    first = planner.plan(needs)
+    assert first["strategy"] == "lanes" and first["win"] == 12 / 16
+    assert planner.plan(needs) == first and len(calls) == 1     # cached on disk
+    assert planner.recipe_key(needs) == planner.recipe_key(Counter(dict(reversed(needs.items()))))
+
+
+def test_planner_sticks_with_standard_unless_beaten_clearly():
+    import planner
+
+    def results(standard, lanes, lanes_turns=30):
+        return {"standard": {"won": standard, "games": 16, "median_turns": 40},
+                "lanes": {"won": lanes, "games": 16, "median_turns": lanes_turns}}
+    assert planner.best(results(16, 16)) == "standard"        # fewer turns is noise
+    assert planner.best(results(10, 11)) == "standard"        # one game is noise
+    assert planner.best(results(10, 12)) == "lanes"
+
+
+def test_planning_really_simulates(monkeypatch, tmp_path):
+    """One tiny real plan, end to end, in worker processes."""
+    import planner
+    monkeypatch.setattr(planner, "PLANS", tmp_path / "plans.json")
+    results = planner.assess(Counter({("red", 2): 1}), games=2, workers=2)
+    assert set(results) == {"standard", "lanes"}
+    assert all(r["games"] == 2 and r["won"] == 2 for r in results.values())
+
+
+def _brewer_with_plan(monkeypatch, win, any_tier=False, fail=False):
+    import planner
+    from brew_bot import Brewer
+
+    def fake_plan(needs):
+        if fail:
+            raise RuntimeError("no simulation")
+        return {"strategy": "lanes", "win": win, "median_turns": 100, "results": {}}
+    monkeypatch.setattr(planner, "plan", fake_plan)
+    return Brewer(table("pantano_start").win, any_tier=any_tier)
+
+
+def test_recipes_the_plan_expects_to_lose_are_skipped(monkeypatch):
+    brewer = _brewer_with_plan(monkeypatch, win=0.4)
+    brewer.play()
+    assert brewer.result == "too hard" and brewer.turns == 0
+    assert brewer.win.actions == []                       # no clicks at all
+
+
+def test_a_good_plan_is_played_with_its_strategy(monkeypatch):
+    from brewing import evaluate
+    brewer = _brewer_with_plan(monkeypatch, win=0.9)
+    assert brewer.choose_plan(Counter({("red", 5): 1}))
+    assert brewer.strategy == "lanes" and brewer.evaluate is not evaluate
+
+
+def test_any_tier_plays_a_poor_plan_anyway(monkeypatch):
+    assert _brewer_with_plan(monkeypatch, win=0.2, any_tier=True).choose_plan(
+        Counter({("blue", 6): 1}))
+
+
+def test_without_a_plan_the_tier_limit_applies(monkeypatch):
+    brewer = _brewer_with_plan(monkeypatch, win=0, fail=True)
+    assert not brewer.choose_plan(Counter({("blue", 6): 1}))
+    assert brewer.choose_plan(Counter({("red", 4): 1}))
+
+
+def test_nothing_happens_away_from_the_potion_table():
+    """Live: started during a sea battle, the bot parked the cursor on the
+    player. Without a recipe or a pair it must not touch the mouse."""
+    from brew_bot import Brewer
+    win = table("recipe_list").win                       # no board, no recipe
+    brewer = Brewer(win)
+    brewer.play()
+    assert brewer.result == "no table" and win.actions == []
