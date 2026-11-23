@@ -35,6 +35,16 @@ WINDOW_CLOSED = object()  # wait_for_game(): the repair window went away
 # however well it's played, while the bot beats people at the other games.
 # Leave pumping to the crew and take it only once nothing else is open.
 LAST_BUTTON = BilgePumping.button
+# Hull patching takes people the longest, so the bot takes it first and
+# leaves the quicker games to the crew.
+FIRST_BUTTON = HullPatching.button
+
+
+def start_order(button, failed_starts):
+    """Sort key for open buttons: a button that failed to open goes to the
+    back, so the others get a turn first; then patching first, pumping last."""
+    return (failed_starts.get(button, 0), button != FIRST_BUTTON,
+            button == LAST_BUTTON)
 
 
 class RepairBot:
@@ -136,9 +146,7 @@ class RepairBot:
         # On a crewed ship other players take games too; theirs show the
         # yellow progress ring and won't open for us. Leave them be.
         pending = [b for b in open_buttons if not button_in_progress(self.win, b)]
-        # A button that failed to open goes to the back of the queue, so the
-        # others get a turn before it's tried again; pumping goes last.
-        pending.sort(key=lambda b: (self.failed_starts.get(b, 0), b == LAST_BUTTON))
+        pending.sort(key=lambda b: start_order(b, self.failed_starts))
         if open_buttons and not pending:
             if not self.announced_waiting:
                 log.info("Waiting for other players to finish their repairs.")

@@ -49,7 +49,7 @@ def test_fresh_repair_window(bot_on):
     assert repair_bar_visible(win)
     assert [button_completed(win, b) for b in BUTTONS] == [False] * 5
     bot.tick()
-    assert clicks(win) == [win.to_screen(*BUTTONS[1])]     # pumping/scrubbing slot goes last
+    assert clicks(win) == [win.to_screen(*BUTTONS[4])]     # hull patching first
 
 
 def test_scrubbing_in_progress(bot_on):
@@ -70,7 +70,7 @@ def test_finished_game_moves_on_to_the_next_button(bot_on):
     assert bot.playable_game() is None
     assert [button_completed(win, b) for b in BUTTONS] == [True, False, False, False, False]
     bot.tick()
-    assert clicks(win) == [win.to_screen(*BUTTONS[1])]     # plank sawing next
+    assert clicks(win) == [win.to_screen(*BUTTONS[4])]     # hull patching next
 
 
 def test_selected_button_frame_hides_the_bar_marker(bot_on):
@@ -583,7 +583,7 @@ def test_window_closing_while_waiting_stops_the_reclick(monkeypatch, snapshot_di
                         lambda s: setattr(bot.win, "image", next(frames)))
     monkeypatch.setattr(repair_bind, "RECLICK_EVERY", 0.0)
     bot.tick()
-    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]   # the first click only
+    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[4])]   # the first click only
     assert bot.failed_starts == {}                               # not a failed start
     assert not list(snapshot_dir.glob("*button_opened_nothing*"))
 
@@ -616,9 +616,9 @@ def test_buttons_other_players_are_using_are_left_alone(bot_on, caplog):
 
 def test_a_button_that_failed_goes_to_the_back_of_the_queue(bot_on):
     """After a failed start the bot tries the other buttons first instead of
-    retrying the same one straight away."""
+    retrying the same one straight away, even patching, which normally goes first."""
     bot = bot_on("repair_start")                    # nothing done yet
-    bot.failed_starts[BUTTONS[0]] = 1
+    bot.failed_starts[BUTTONS[4]] = 1
     bot.tick()
     assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]
 
@@ -681,11 +681,12 @@ def test_waiting_for_the_wrong_button_times_out(no_waiting):
 def test_slow_switch_counts_as_opened(no_waiting, monkeypatch, snapshot_dir):
     """Regression: plank sawing took ~3.5 s to appear; a 3 s wait gave up."""
     import repair_bind
-    frames = iter([live("scrubbing_done").image] * 4 + [live("plank_letter_n").image] * 99)
+    frames = iter([live("scrubbing_done").image] * 4
+                  + [live("patching_two_new_leaks").image] * 99)
     bot = RepairBot(live("scrubbing_done"))
     monkeypatch.setattr(repair_bind, "wait", lambda s: setattr(bot.win, "image", next(frames)))
-    bot.tick()                                    # clicks plank sawing, waits
-    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]
+    bot.tick()                                    # clicks hull patching, waits
+    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[4])]
     assert not list(snapshot_dir.glob("*button_opened_nothing*"))
     assert bot.failed_starts == {}
 
@@ -700,8 +701,8 @@ def test_a_game_that_times_out_is_skipped_for_this_ship(bot_on, monkeypatch):
     bot = bot_on("bracing_play")                  # bracing open, not finished
     bot.tick()                                    # plays it; it times out
     assert bot.skipped == {"hull_bracing"} and clicks(bot.win) == []
-    bot.tick()                                    # next: hammering, not bracing
-    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[3])]
+    bot.tick()                                    # next: patching, not bracing
+    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[4])]
 
 
 def test_live_button_centres():
@@ -755,6 +756,14 @@ def test_the_saw_is_held_still_before_and_after_it_is_picked_up(monkeypatch):
 def test_pumping_is_left_until_the_other_games_are_done(bot_on):
     """The bot is faster than people at every game but bilge pumping, which
     takes ~10 s however it's played: it takes the others first."""
-    bot = bot_on("repair_start")                    # nothing done yet
-    bot.tick()
-    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]
+    from repair_bind import start_order
+    order = sorted(BUTTONS, key=lambda b: start_order(b, {}))
+    assert order[-1] == BUTTONS[0]                  # pumping/scrubbing slot
+
+
+def test_patching_goes_first():
+    """Hull patching takes people the longest, so the bot takes it first,
+    then the rest left to right, pumping last."""
+    from repair_bind import start_order
+    order = sorted(BUTTONS, key=lambda b: start_order(b, {}))
+    assert order == [BUTTONS[4], BUTTONS[1], BUTTONS[2], BUTTONS[3], BUTTONS[0]]
