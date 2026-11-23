@@ -43,6 +43,11 @@ SHAFT_FROM, SHAFT_TO = 28, 42   # ref px below the top of the head (past its sha
 # Clicks land ~10 ms apart, so that's 2-3 nails per glow, none wasted.
 BURST_WINDOW = 0.03     # every click must land within this of the glow
 BURST_MAX = 5           # nails per glow
+# Live (Nov 22, 8-nail board): first hits landing ~11 ms after the glow was
+# seen never drove their nail (one nail was hit first four times running),
+# while the next hit, ~22 ms after, always did, as did single hits at ~18 ms.
+# The glow shows a moment before the game takes hits as "most powerful".
+FIRST_HIT_DELAY = 0.008 # seconds to wait after seeing the glow
 STEADY_GAP = 0.03       # seconds between the two scans of steady_nails()
 STEADY_TOLERANCE = 3    # ref px a real nail may "move" between them
 
@@ -129,6 +134,9 @@ class Hammering(RepairMiniGame):
         glow_at = self.wait_for_glow(nails[0])
         if glow_at is None:
             return 0
+        early = FIRST_HIT_DELAY - (time.monotonic() - glow_at)
+        if early > 0:
+            time.sleep(early)
         hits = 0
         click_time = 0.0  # how long the last click took, to predict the next
         for nail in nails[:BURST_MAX]:

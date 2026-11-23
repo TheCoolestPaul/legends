@@ -364,9 +364,11 @@ def test_burst_clicks_all_land_inside_the_window(monkeypatch):
     live; every click after the first must finish inside BURST_WINDOW."""
     import types
     import hammering
-    from hammering import BURST_WINDOW
+    from hammering import BURST_WINDOW, FIRST_HIT_DELAY
     clock = types.SimpleNamespace(now=0.0)
-    monkeypatch.setattr(hammering, "time", types.SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(hammering, "time", types.SimpleNamespace(
+        monotonic=lambda: clock.now,
+        sleep=lambda s: setattr(clock, "now", clock.now + s)))
     win = live("hammering_ready")
     game = Hammering(win)
     nails = game.find_nails()
@@ -378,7 +380,8 @@ def test_burst_clicks_all_land_inside_the_window(monkeypatch):
         landed.append(clock.now)
     monkeypatch.setattr(win, "click", click_taking_10ms)
     hits = game.burst(nails)
-    assert hits == 3                                  # lands at 10, 20, 30 ms
+    assert hits == 2                                  # lands at 18, 28 ms
+    assert landed[0] >= FIRST_HIT_DELAY + 0.010 - 1e-9  # live: earlier hits didn't count
     assert all(t <= BURST_WINDOW + 1e-9 for t in landed), landed
 
 
