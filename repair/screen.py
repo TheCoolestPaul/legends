@@ -56,6 +56,7 @@ WINDOW_TITLES = (
     "The Legend of Pirates Online",
 )
 
+PARK_FROM_TOP = 8    # ref px below the top of the game where the cursor rests
 DRAG_STEP = 15       # ref px between cursor positions while dragging
 DRAG_DELAY = 0.008   # seconds between those positions (~1 per game frame)
 
@@ -505,10 +506,16 @@ class GameWindow:
             self.mouse_up(*path[-1])
 
     def park_mouse(self):
-        """Move the cursor to the left edge of the game so it hides nothing."""
+        """Move the cursor out of the way: top centre of the game, just below
+        the edge. (Left centre sat over the crew list, and a lagged click
+        landing there opened a crewmate's profile.)"""
         import pyautogui
         if self.is_foreground():
-            pyautogui.moveTo(self.rect.left + 10, self.rect.top + self.rect.height // 2)
+            pyautogui.moveTo(*self.park_point())
+
+    def park_point(self):
+        return (self.rect.left + self.rect.width // 2,
+                self.rect.top + max(5, round(PARK_FROM_TOP * self.scale)))
 
 
 class ImageWindow(GameWindow):

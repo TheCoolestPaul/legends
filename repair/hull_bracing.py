@@ -9,7 +9,8 @@ or blue stripe, a vertical green stripe, or both (a cross). Tile codes:
 
 Every line colour with four pieces on the board must form a full line:
 red and blue a full row, green a full column. Boards seen live: blue + red
-(two rows) and red + green (a row and a column crossing at the X tile).
+(two rows), red + green (a row and a column crossing at the X tile), and
+red only ("form a straight line!": one row).
 
 A tile is read from two patches on its horizontal stripe line, left and
 right of the middle (missing the vertical stripe and the dark middle of a
@@ -168,16 +169,19 @@ def neighbours(state):
                     yield "".join(nxt), (src, empty)
 
 
-def solve(grid, max_expansions=MAX_EXPANSIONS):
+def solve(grid, max_expansions=MAX_EXPANSIONS, min_lines=1):
     """Moves (from_index, to_index) that reach the goal, or None.
 
     ``grid`` is a list of rows of single-character tiles. Best-first search
-    with a closed set; [] means the grid is already solved.
+    with a closed set; [] means the grid is already solved. Boards ask for
+    one line ("form a straight line!", e.g. four reds) or two; a caller
+    unsure of its reading can demand ``min_lines`` (a hidden piece can make
+    a two-line board look like a one-line one).
     """
     start = "".join("".join(row) for row in grid)
     required = required_lines(start)
-    if len(required) != 2:
-        return None  # the game always asks for two lines: misread board
+    if len(required) < max(1, min_lines):
+        return None  # no colour with four pieces (or fewer than demanded)
     tie = itertools.count()
     frontier = [(SOLVER_WEIGHT * heuristic(start, required), next(tie), 0, start, ())]
     best_cost = {start: 0}
@@ -256,7 +260,8 @@ class HullBracing(RepairMiniGame):
         rows = ["".join(row) for row in grid]
         self.info = {"grid": rows}
         log.info("Grid:\n%s", "\n".join("|%s|" % row for row in rows))
-        if any("?" in row for row in rows):
+        unsure = any("?" in row for row in rows)
+        if unsure:
             grid = [["O" if c == "?" else c for c in row] for row in grid]
             if is_goal("".join("".join(row) for row in grid)):
                 return  # solved; the "You Win!" banner covers some tiles
@@ -267,7 +272,9 @@ class HullBracing(RepairMiniGame):
                 return
             log.warning("Some tiles could not be read (?); treating them as blocks")
         self.found("readable_grid")
-        moves = solve(grid)
+        # With unreadable tiles, a hidden piece could turn a two-line board
+        # into what looks like a one-line one: only trust two-line readings.
+        moves = solve(grid, min_lines=2 if unsure else 1)
         if moves is None:
             log.warning("No solution found for this grid; re-reading")
             self.snapshot("no_solution")

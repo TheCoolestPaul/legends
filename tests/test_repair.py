@@ -380,6 +380,14 @@ def test_scrambled_puzzles_are_solved(kind, seed):
     assert len(moves) <= 30
 
 
-def test_boards_that_do_not_need_two_lines_are_refused():
-    # Only red has four pieces (a hidden tile read as a block): misread.
-    assert solve(grid_of("RRR OOOOROO BOBB")) is None
+def test_one_line_boards_are_solved_two_lines_demanded_when_unsure():
+    # "Form a straight line!": only red has four pieces.
+    one_line = "RRR OOOOROO BOBB"
+    moves = solve(grid_of(one_line))
+    assert moves is not None and is_goal(apply(one_line, moves))
+    # With unreadable tiles the caller demands two lines: refused.
+    assert solve(grid_of(one_line), min_lines=2) is None
+
+
+def test_boards_without_a_full_set_of_pieces_are_refused():
+    assert solve(grid_of("RRB OOOOROO BOBO")) is None   # 3 reds, 3 blues

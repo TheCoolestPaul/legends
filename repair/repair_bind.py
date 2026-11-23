@@ -17,8 +17,8 @@ from hull_scrubbing import HullScrubbing
 from plank_sawing import PlankSawing
 import snapshots
 from repair_mini_game import (BUTTONS, TITLE_REGION, TITLE_THRESHOLD,
-                              button_completed, parse_args, repair_bar_visible,
-                              session_hotkeys)
+                              button_completed, button_in_progress, parse_args,
+                              repair_bar_visible, session_hotkeys)
 from screen import (GameWindow, StopRequested, WindowNotFound, live_session,
                     timed_out, wait)
 
@@ -38,6 +38,7 @@ class RepairBot:
         self.games = [cls(window) for cls in GAME_CLASSES]
         self.failed_starts = {}
         self.announced_done = False
+        self.announced_waiting = False
         self.skipped = set()   # games that timed out on this ship
 
     def active_game(self):
@@ -119,9 +120,22 @@ class RepairBot:
         if shown is None and not any(done):
             self.skipped.clear()           # a fresh ship: try everything again
         skipped_buttons = {g.button for g in self.games if g.name in self.skipped}
-        pending = [b for b, d in zip(BUTTONS, done)
-                   if not d and b not in skipped_buttons
-                   and self.failed_starts.get(b, 0) < MAX_START_ATTEMPTS]
+        open_buttons = [b for b, d in zip(BUTTONS, done)
+                        if not d and b not in skipped_buttons
+                        and self.failed_starts.get(b, 0) < MAX_START_ATTEMPTS]
+        # On a crewed ship other players take games too; theirs show the
+        # yellow progress ring and won't open for us. Leave them be.
+        pending = [b for b in open_buttons if not button_in_progress(self.win, b)]
+        # A button that failed to open goes to the back of the queue, so the
+        # others get a turn before it's tried again.
+        pending.sort(key=lambda b: self.failed_starts.get(b, 0))
+        if open_buttons and not pending:
+            if not self.announced_waiting:
+                log.info("Waiting for other players to finish their repairs.")
+                self.announced_waiting = True
+            wait(1)
+            return
+        self.announced_waiting = False
         if not pending:
             if not self.announced_done:
                 log.info("Nothing left to repair%s.",

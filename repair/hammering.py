@@ -26,6 +26,7 @@ GLOW_OFFSET = 15
 GLOW_RED = 180
 GLOW_FRACTION = 0.1
 HAMMER_WINDOW = 1.5     # seconds to wait for the glow on one nail
+REMOVE_EVERY = 0.25     # re-send the move to the nail this often while waiting
 TRACE_LIMIT = 3000      # polls kept per round when tracing
 # A real nail has a plain grey shaft under its head; the hammer sprite that
 # follows the cursor (wooden handle) and other grey bits don't. Checked on
@@ -98,7 +99,9 @@ class Hammering(RepairMiniGame):
         """Hover ``nail`` until the circle glows; the time it did, or None."""
         self.win.move(*nail)
         self._trace_event("move", nail)
-        deadline = time.monotonic() + HAMMER_WINDOW
+        started = last_move = time.monotonic()
+        deadline = started + HAMMER_WINDOW
+        nudge = 1
         while time.monotonic() < deadline:
             check_stop()
             if not self.still_open():
@@ -107,8 +110,17 @@ class Hammering(RepairMiniGame):
             self._trace_poll(nail, frac)
             if frac >= GLOW_FRACTION:
                 return time.monotonic()
+            # Live: with the game's input lagging, the move to the nail was
+            # sometimes lost, so the circle (and its glow) stayed where the
+            # cursor had been and the bot waited forever. Re-send the move,
+            # nudged a pixel so the game sees fresh movement.
+            if time.monotonic() - last_move >= REMOVE_EVERY:
+                self.win.move(nail.x + nudge, nail.y)
+                nudge, last_move = -nudge, time.monotonic()
             time.sleep(0.005)
         self._trace_event("gave_up", nail)
+        log.info("No glow at nail %s within %.1fs", tuple(nail), HAMMER_WINDOW)
+        self.snapshot("no_glow", nail=tuple(nail))
         return None
 
     def burst(self, nails):

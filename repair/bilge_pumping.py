@@ -16,14 +16,23 @@ import time
 
 import numpy as np
 
+import snapshots
 from repair_mini_game import BUTTONS, Point, RepairMiniGame, run_standalone
 from screen import check_stop
 
 log = logging.getLogger("repair")
 
 GAUGE = (840, 480, 240, 500)     # ref region the rod and green zone live in
+GAUGE_MIDDLE = 718               # ref y between the top and bottom zones
+PUMP_AT = Point(1420, 700)       # the ship picture, right of the gauge
 MIN_GOLD = 4                     # gold pixels in a row to count as the rod
+# Zone rows hold ~35-100 green px in the recordings, so text can't be told
+# apart by width; the "Great!" text floating up after a pump is handled by
+# targeting the end opposite the last pump (see read_gauge).
 MIN_GREEN = 20                   # green pixels in a row to count as the zone
+# The two places the green zone can be, measured live (ref y).
+ZONES = {"top": (509, 572), "bottom": (874, 917)}
+MIN_ZONE_ROWS = 6                # green rows (rod rows aside) for a zone to show
 ROD_HALF_HEIGHT = 10             # ref px the rod covers either side of its centre
 CLICK_LATENCY = 0.012            # seconds from deciding to the click landing
 SPEED_WINDOW = 0.02              # seconds of rod positions used for its speed
@@ -44,13 +53,9 @@ def rod_row(image, scale):
     return float(rows.mean()) if len(rows) else None
 
 
-def green_rows(image, scale, rod=None):
-    """(first, last) image rows of the green zone, or None.
-
-    Rows the rod covers (``rod`` = its centre row) are ignored: live, green
-    showing through the rod made a rod resting on the zone's edge stretch
-    the zone by ~10 px.
-    """
+def green_row_mask(image, scale, rod=None):
+    """Per image row: is it a green-zone row? Rows the rod covers (``rod`` =
+    its centre row) are ignored: green shows through the rod."""
     img = image.astype(int)
     r, g, b = img[..., 0], img[..., 1], img[..., 2]
     green = (g > 140) & (r < 110) & (b < 110)
@@ -58,15 +63,7 @@ def green_rows(image, scale, rod=None):
     if rod is not None:
         half = round(ROD_HALF_HEIGHT * scale)
         counts[max(0, round(rod) - half):round(rod) + half + 1] = 0
-    rows = np.flatnonzero(counts >= max(3, round(MIN_GREEN * scale)))
-    if not len(rows):
-        return None
-    # the rod crossing the zone splits it: bridge rod-sized gaps, keep the
-    # largest block
-    bridge = 2 * ROD_HALF_HEIGHT + 10       # the ignored rod rows plus soft edges
-    runs = np.split(rows, np.flatnonzero(np.diff(rows) > max(3, round(bridge * scale))) + 1)
-    run = max(runs, key=len)
-    return int(run[0]), int(run[-1])
+    return counts >= max(3, round(MIN_GREEN * scale))
 
 
 class BilgePumping(RepairMiniGame):
@@ -75,15 +72,37 @@ class BilgePumping(RepairMiniGame):
     button = BUTTONS[0]  # same slot as hull scrubbing; shown at sea
 
     def read_gauge(self):
-        """(rod y, (zone top, zone bottom)) in ref coords; either may be None."""
+        """(rod y, (zone top, zone bottom)) in ref coords; either may be None.
+
+        The zone is one of the two fixed ZONES: whichever end is green. Live,
+        right after a pump a green "Great!" floats up from the old zone
+        while the new one appears; picking "the biggest green patch" then
+        chose the wrong end and let the rod pass the new zone. The zone
+        always alternates, so the end opposite the last pump wins whenever
+        it shows green.
+        """
         img = self.win.grab(*GAUGE)
         s = self.win.scale
         row = rod_row(img, s)
         rod = None if row is None else self.win.image_to_ref(GAUGE, 0, row)[1]
-        zone = green_rows(img, s, rod=row)
-        if zone is not None:
-            zone = tuple(self.win.image_to_ref(GAUGE, 0, z)[1] for z in zone)
-        return rod, zone
+        green = green_row_mask(img, s, rod=row)
+        rows = {}
+        for end, (z0, z1) in ZONES.items():
+            i0, i1 = round((z0 - GAUGE[1]) * s), round((z1 - GAUGE[1]) * s)
+            rows[end] = int(green[max(0, i0):i1 + 1].sum())
+        showing = [end for end, n in rows.items() if n >= round(MIN_ZONE_ROWS * s)]
+        expected = {"top": "bottom", "bottom": "top"}.get(self.last_pumped_end)
+        if expected in showing:
+            end = expected
+        elif showing:
+            end = max(showing, key=rows.get)
+        else:
+            return rod, None
+        return rod, ZONES[end]
+
+    def __init__(self, window=None):
+        super().__init__(window)
+        self.last_pumped_end = None  # "top"/"bottom": the zone moves away after a pump
 
     def rod_y(self):
         return self.read_gauge()[0]
@@ -93,20 +112,23 @@ class BilgePumping(RepairMiniGame):
         click lands), pump once, then wait for the zone to move away."""
         deadline = time.monotonic() + WAIT_FOR_GREEN
         seen = []  # recent (time, rod y), for the rod's speed
-        clean_zone = None  # the zone as read while the rod wasn't on it
+        trace = [] if snapshots.recording else None
+        try:
+            self._step(deadline, seen, trace)
+        finally:
+            if trace:
+                self._flush_trace(trace)
+
+    def _step(self, deadline, seen, trace):
+        if trace is not None:
+            trace.append({"t": round(time.monotonic(), 4), "event": "step"})
         while time.monotonic() < deadline:
             check_stop()
             if not self.still_open():
                 return
             now = time.monotonic()
             rod, zone = self.read_gauge()
-            if zone is not None:
-                clear = ROD_HALF_HEIGHT + 2
-                if rod is None or rod < zone[0] - clear or rod > zone[1] + clear:
-                    clean_zone = zone
-                # While the rod is on the zone it hides part of it (all of the
-                # bottom, at the end of its travel): use the clean reading.
-                zone = clean_zone or zone
+            raw_zone = zone
             if rod is None:
                 seen = []
             else:
@@ -119,22 +141,55 @@ class BilgePumping(RepairMiniGame):
                 speed = (rod - seen[0][1]) / (now - seen[0][0])
                 landing = rod + speed * CLICK_LATENCY
                 top, bottom = zone[0] + EDGE_MARGIN, zone[1] - EDGE_MARGIN
-                if top <= rod <= bottom and top <= landing <= bottom:
+                # The zones sit at the ends of the gauge, where the rod
+                # bounces. Heading into that end, the rod can't overshoot:
+                # it stays in the green until it comes back out, so pump as
+                # soon as it's in. (Live: waiting for the landing point to
+                # fit meant waiting for the bounce, every time.) Heading back
+                # out, the click must land before it leaves.
+                at_top = (zone[0] + zone[1]) / 2 < GAUGE_MIDDLE
+                heading_in = speed < 0 if at_top else speed > 0
+                in_zone = top <= rod <= bottom
+                pump = in_zone and (heading_in or top <= landing <= bottom)
+                if trace is not None:
+                    trace.append({"t": round(now, 4), "rod": round(rod, 1),
+                                  "raw_zone": raw_zone, "zone": zone,
+                                  "speed": round(speed * 1000, 3) / 1000,
+                                  "pump": bool(pump)})
+                if pump:
                     self.win.click(*self._pump_point(zone))
+                    self.last_pumped_end = "top" if at_top else "bottom"
                     self.info = {"pumped_at_y": round(rod), "zone": [round(z) for z in zone]}
                     log.debug("pump: rod %d moving %+.2f px/ms, zone %d-%d",
                               rod, speed / 1000, zone[0], zone[1])
                     self.found("rod")
                     self._wait_for_zone_to_move(zone)
+                    if trace is not None:
+                        trace.append({"t": round(time.monotonic(), 4), "event": "zone_moved"})
                     return
+            elif trace is not None:
+                trace.append({"t": round(now, 4), "rod": rod, "raw_zone": raw_zone,
+                              "zone": zone, "speed": None, "pump": False})
             time.sleep(POLL)
         rod, zone = self.read_gauge()
         self.info = {"rod_y": rod, "zone": zone}
         self.nothing_found("rod", after=3)
 
+    def _flush_trace(self, trace):
+        try:
+            import json
+            snapshots.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(snapshots.SNAPSHOT_DIR / "bilge_trace.jsonl", "a") as f:
+                for row in trace:
+                    f.write(json.dumps(row, default=float) + "\n")
+        except Exception:
+            log.exception("Could not save the bilge trace")
+
     def _pump_point(self, zone):
-        """Click on the gauge, in the middle of the green zone."""
-        return Point(GAUGE[0] + GAUGE[2] // 2 - 10, round((zone[0] + zone[1]) / 2))
+        """Where to click. Any click on the game pumps, so click on the ship
+        picture, well away from the gauge: clicking on the zone left the
+        cursor sitting over the very thing being read."""
+        return PUMP_AT
 
     def _wait_for_zone_to_move(self, zone):
         """After a pump the zone jumps to the other end; wait for that (or for

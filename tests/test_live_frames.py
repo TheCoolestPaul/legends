@@ -107,6 +107,20 @@ def test_bracing_red_row_and_green_column_board():
     assert is_goal("".join(cells))
 
 
+def test_bracing_one_line_board():
+    """Regression (live): "Move the pieces to form a straight line!" with four
+    red pieces; the solver demanded two lines and refused it forever."""
+    from hull_bracing import is_goal, solve
+    rows = grid_rows(live("bracing_one_line"))
+    assert rows == ["OOR ", "R  O", " R O", "O  R"]
+    moves = solve([list(r) for r in rows])
+    assert moves is not None
+    cells = list("".join(rows))
+    for src, dst in moves:
+        cells[dst], cells[src] = cells[src], " "
+    assert is_goal("".join(cells))
+
+
 def test_bracing_board_under_the_ready_banner():
     # Row 3 sits under the "Ready!" text; everything else reads correctly.
     rows = grid_rows(live("bracing_ready"))
@@ -368,6 +382,36 @@ def test_burst_clicks_all_land_inside_the_window(monkeypatch):
     assert all(t <= BURST_WINDOW + 1e-9 for t in landed), landed
 
 
+def test_hammer_resends_the_move_while_waiting_for_glow(monkeypatch, snapshot_dir):
+    """Live: with input lagging, the move to a nail was lost and the bot
+    hovered there without ever clicking. While waiting it re-sends the
+    move, and if no glow comes it says so and saves a frame."""
+    import types
+    import hammering
+    clock = types.SimpleNamespace(now=0.0)
+    monkeypatch.setattr(hammering, "time", types.SimpleNamespace(
+        monotonic=lambda: clock.now,
+        sleep=lambda s: setattr(clock, "now", clock.now + s)))
+    win = live("hammering_one_left")                # no glowing circle on screen
+    game = Hammering(win)
+    monkeypatch.setattr(game, "still_open", lambda: True)
+    assert game.wait_for_glow(Point(1484, 740)) is None
+    moves = [p for k, p in win.actions if k == "move"]
+    expected = int(hammering.HAMMER_WINDOW / hammering.REMOVE_EVERY)
+    assert len(moves) >= expected                   # the first move plus re-sends
+    assert len({p for p in moves}) > 1              # nudged, not identical
+    assert len(list(snapshot_dir.glob("*no_glow*.png"))) == 1
+
+
+def test_cursor_rests_at_top_centre(monkeypatch):
+    """Resting left-centre put the cursor over the crew list, where a lagged
+    click opened a crewmate's profile."""
+    win = live("repair_start")
+    x, y = win.park_point()
+    assert abs(x - (win.rect.left + win.rect.width // 2)) <= 1
+    assert win.rect.top <= y <= win.rect.top + 20
+
+
 def test_burst_stops_when_the_glow_is_over(monkeypatch):
     hits, clicked, nails = burst_on(monkeypatch, glow_age=1.0)
     assert hits == 1 and clicked == nails[:1]       # the nail that glowed
@@ -460,6 +504,52 @@ def test_bilge_pumps_once_while_the_rod_is_in_the_green(monkeypatch, fixture, zo
     assert zone[0] <= y <= zone[1], (y, game.info)
 
 
+def test_bilge_ignores_the_old_zone_lingering_after_a_pump(monkeypatch):
+    """Regression (live trace): after a top pump the old zone lingers as a
+    green band near the top while the bottom zone shows. Picking the biggest
+    green patch chose the top, so the rod passed the bottom zone unpumped
+    and was only caught a whole bounce later."""
+    game, clock, clicks, rod_y_at = gauge_playback(monkeypatch, "bilge_gauge_bottom")
+    win = game.win
+    y0 = 530 - 23                                   # a 34 px band, like the trace
+    win.image[y0:y0 + 34, 860:1040] = (40, 200, 60)
+    game.last_pumped_end = "top"
+    data = np.load(LIVE / "bilge_gauge_bottom.npz")
+    ys = [(t, rod_y_at(t)) for t in data["times"]]
+    bounce_at = max((ty for ty in ys if ty[1] is not None), key=lambda ty: ty[1])[0]
+    game.step()
+    assert clicks and clicks[0] <= bounce_at, (clicks, bounce_at)
+    assert game.last_pumped_end == "bottom"
+
+
+def test_bilge_clicks_away_from_the_gauge(monkeypatch):
+    """Any click on the game pumps. Clicking on the zone left the cursor over
+    the gauge being read, so pumps click on the ship picture instead."""
+    from bilge_pumping import GAUGE, PUMP_AT
+    game, clock, clicks, rod_y_at = gauge_playback(monkeypatch)
+    spots = []
+    game.win.click = lambda x, y: (spots.append((x, y)), clicks.append(clock.now))
+    game.step()
+    assert spots == [PUMP_AT]
+    gx, gy, gw, gh = GAUGE
+    assert not (gx <= PUMP_AT.x <= gx + gw and gy <= PUMP_AT.y <= gy + gh)
+
+
+@pytest.mark.parametrize("fixture, end", [("bilge_gauge", "top"),
+                                          ("bilge_gauge_bottom", "bottom")])
+def test_bilge_pumps_on_the_way_in_not_after_the_bounce(monkeypatch, fixture, end):
+    """Regression (live): the bot waited for the rod to bounce off the end of
+    the gauge before pumping. Heading into the end it can't overshoot, so
+    the pump must land before the bounce."""
+    game, clock, clicks, rod_y_at = gauge_playback(monkeypatch, fixture)
+    data = np.load(LIVE / (fixture + ".npz"))
+    ys = [(t, rod_y_at(t)) for t in data["times"]]
+    ys = [(t, y) for t, y in ys if y is not None]
+    bounce_at = (min if end == "top" else max)(ys, key=lambda ty: ty[1])[0]
+    game.step()
+    assert clicks and clicks[0] <= bounce_at, (clicks, bounce_at)
+
+
 # -- the repair window going away ----------------------------------------------
 def test_no_clicks_when_the_player_is_at_a_cannon(monkeypatch):
     import repair_bind
@@ -495,6 +585,65 @@ def test_no_button_click_if_the_window_closed_just_before(monkeypatch):
     monkeypatch.setattr(repair_bind, "wait", lambda s: None)
     bot.tick()
     assert clicks(bot.win) == []
+
+
+# -- crewed ships: other players' games ----------------------------------------
+def test_buttons_other_players_are_using_are_left_alone(bot_on, caplog):
+    """Live: on a crewed ship the bot kept clicking a button whose game
+    another player was in (yellow progress ring); it can't open for us."""
+    import logging
+    import repair_bind
+    from repair_mini_game import button_in_progress
+    bot = bot_on("crew_busy")                       # 4 done, patching in progress
+    assert [button_in_progress(bot.win, b) for b in BUTTONS] == [False] * 4 + [True]
+    repair_bind.wait = lambda s: None
+    with caplog.at_level(logging.INFO, logger="repair"):
+        bot.tick()
+    assert clicks(bot.win) == []
+    assert "Waiting for other players" in caplog.text
+
+
+def test_a_button_that_failed_goes_to_the_back_of_the_queue(bot_on):
+    """After a failed start the bot tries the other buttons first instead of
+    retrying the same one straight away."""
+    bot = bot_on("repair_start")                    # nothing done yet
+    bot.failed_starts[BUTTONS[0]] = 1
+    bot.tick()
+    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]
+
+
+def test_own_game_in_progress_still_plays(bot_on, monkeypatch):
+    """Our own game shows the yellow ring too; it's played, not skipped."""
+    bot = bot_on("scrubbing_play")
+    played = []
+    monkeypatch.setattr(HullScrubbing, "play", lambda self: played.append(self.name))
+    bot.tick()
+    assert played == ["hull_scrubbing"]
+
+
+def test_no_input_until_a_beat_after_the_banner_goes(monkeypatch):
+    """Live: games still started early, because input stays ignored for a
+    moment after the banner disappears. play() waits BANNER_GRACE first."""
+    import types
+    import repair_mini_game
+    from repair_mini_game import BANNER_GRACE
+    screen.reset_stop()
+    clock = types.SimpleNamespace(now=0.0)
+    monkeypatch.setattr(repair_mini_game, "time",
+                        types.SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(repair_mini_game, "timed_out", lambda d: clock.now > d)
+    steps = []
+    win = live("hammering_one_left")                # no banner on screen
+    game = Hammering(win)
+    monkeypatch.setattr(game, "step", lambda: steps.append(clock.now) or screen.request_stop())
+
+    def fake_wait(seconds):
+        clock.now += seconds
+    monkeypatch.setattr(repair_mini_game, "wait", fake_wait)
+    with pytest.raises(screen.StopRequested):
+        game.play()
+    screen.reset_stop()
+    assert steps and steps[0] >= BANNER_GRACE - 1e-9
 
 
 # -- opening the next game -----------------------------------------------------

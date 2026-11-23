@@ -31,6 +31,8 @@ BUTTONS = [Point(840, 1226), Point(1061, 1226), Point(1275, 1226),
            Point(1500, 1226), Point(1715, 1226)]
 COMPLETED_GREEN_FRACTION = 0.05  # measured: done 0.15, not done 0.00
 STILL_OPEN_CACHE = 0.1  # seconds a still_open() answer is reused
+IN_PROGRESS_FRACTION = 0.035  # yellow ring share: a game in progress
+BANNER_GRACE = 0.35  # seconds after the start banner goes before acting
 
 # A piece of the button bar's wood, used to tell that the repair UI is open.
 BAR_MARKER = "repair_bar.png"
@@ -85,6 +87,17 @@ def button_completed(win, button):
     img = win.grab(button.x - 45, button.y - 45, 90, 90).astype(int)
     r, g, b = img[..., 0], img[..., 1], img[..., 2]
     return bool(((g > 150) & (r < 90) & (b < 90)).mean() >= COMPLETED_GREEN_FRACTION)
+
+
+def button_in_progress(win, button):
+    """True if the button shows the yellow progress ring: its game is being
+    played. On a crewed ship that can be another player, and then clicking
+    it opens nothing for us. Measured: in progress 0.046-0.131, idle or done
+    0.023 or less."""
+    img = win.grab(button.x - 45, button.y - 45, 90, 90).astype(int)
+    r, g, b = img[..., 0], img[..., 1], img[..., 2]
+    yellow = (r > 170) & (g > 140) & (b < 90) & (r - b > 100)
+    return bool(yellow.mean() >= IN_PROGRESS_FRACTION)
 
 
 def repair_bar_visible(win):
@@ -177,6 +190,7 @@ class RepairMiniGame:
         deadline = started + self.timeout
         self.info, self._misses = {}, {}
         self.timed_out = False
+        banner_gone_at = None
         while True:
             check_stop()
             self.win.refresh()
@@ -195,7 +209,15 @@ class RepairMiniGame:
                 self.timed_out = True
                 return False
             if banner_visible(self.win):
+                banner_gone_at = None
                 wait(0.05)  # "Ready!" / "Brace!"...: the game isn't taking input yet
+                continue
+            # Live: input is still ignored for a moment after the banner
+            # goes, so the first moves of a game were lost. Give it a beat.
+            if banner_gone_at is None:
+                banner_gone_at = time.monotonic()
+            if time.monotonic() - banner_gone_at < BANNER_GRACE:
+                wait(0.05)
                 continue
             # The frame is taken before this step runs, so what's attached is
             # what the *previous* step saw (it may already have acted on it).
