@@ -111,6 +111,7 @@ class RepairMiniGame:
     button = None        # Point in BUTTONS
     timeout = 180        # seconds before giving up on one game
     start_timeout = 3    # seconds to wait for the game to open after a click
+    timed_out = False    # set by play(): did the last play give up?
 
     def __init__(self, window=None):
         self.win = window if window is not None else GameWindow()

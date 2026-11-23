@@ -23,8 +23,12 @@ Capture only ever reads the game window's client area:
   copying the game area from the screen, and it logs a warning when it does.
   Set TLOPO_CAPTURE=bitblt|printwindow|screen to force a method.
 
-Mouse input is only sent while the game is the foreground window, and only
-to points inside the game area.
+Mouse input only ever goes to points inside the game area. By default it is
+posted to the game window as window messages ("background" input): the game
+needn't be in front and the real cursor never moves, so the PC stays usable
+(keep the real cursor off the game, or its moves mix with the bot's). With
+TLOPO_INPUT=mouse the real cursor is driven instead, and only while the game
+is the foreground window.
 """
 import contextlib
 import ctypes
@@ -67,6 +71,19 @@ DRAG_STEP = 15       # ref px between cursor positions while dragging
 DRAG_DELAY = 0.008   # seconds between those positions (~1 per game frame)
 
 CAPTURE_MODES = ("bitblt", "printwindow", "screen")
+# "background": mouse input is posted to the game window as messages, so the
+#   game needn't be in front and the real cursor is never moved.
+# "mouse": the real cursor is moved and clicked (pyautogui), only while the
+#   game is the foreground window.
+INPUT_MODES = ("background", "mouse")
+DEFAULT_INPUT = "background"   # TLOPO_INPUT=mouse switches back
+BG_PAUSE = 0.01         # s after each posted message (= pyautogui.PAUSE)
+BG_CLICK_HOVER = 0.02   # s on a new point before pressing (background click)
+BG_CLICK_HOLD = 0.01    # s the button is held
+WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
+WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
+WM_XBUTTONDOWN, WM_XBUTTONUP = 0x020B, 0x020C
+MK_LBUTTON, MK_RBUTTON, MK_XBUTTON1, XBUTTON1 = 0x0001, 0x0002, 0x0020, 0x0001
 PRINTWINDOW_REUSE = 0.015  # s; one PrintWindow frame serves grabs this close together
 PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
 
@@ -119,8 +136,22 @@ def key_down(vk):
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
 
+_background_windows = []      # GameWindows sending input as window messages
+
+
 def release_mouse():
-    """Release the left mouse button if it is held, so a drag never sticks."""
+    """Release the left mouse button if it is held, so a drag never sticks.
+
+    In background-input mode the real mouse is the player's own: only the
+    buttons the bot posted to the game are released.
+    """
+    if _background_windows:
+        for win in list(_background_windows):
+            try:
+                win.release_buttons()
+            except Exception:
+                log.exception("Could not release the game's mouse buttons")
+        return
     if sys.platform != "win32":
         return
     try:
@@ -211,7 +242,7 @@ def live_session(hotkeys=None, debug=False):
     pyautogui.PAUSE = 0.01
     reset_stop()
     KillSwitch(hotkeys=hotkeys).start()
-    log.info("Press ` to stop (or Ctrl+C, or move the mouse into a screen corner).")
+    log.info("Press ` to stop (or Ctrl+C).")
     try:
         yield
     except StopRequested:
@@ -307,18 +338,24 @@ def capture_printwindow(hwnd, width, height):
 class GameWindow:
     """The live game window. Methods take and return reference coordinates."""
 
-    def __init__(self, capture=None):
+    def __init__(self, capture=None, input=None):
         forced = capture or os.environ.get("TLOPO_CAPTURE") or None
         if forced is not None and forced not in CAPTURE_MODES:
             raise ValueError("capture must be one of %s" % (CAPTURE_MODES,))
+        input = input or os.environ.get("TLOPO_INPUT") or DEFAULT_INPUT
+        if input not in INPUT_MODES:
+            raise ValueError("input must be one of %s" % (INPUT_MODES,))
         self.forced_capture = forced
         self.capture_mode = forced
+        self.input_mode = input
         self.hwnd = None
         self.rect = None
         self._sct = None
         self._frame = None
         self._frame_time = 0.0
         self._input_paused = False
+        self._held = 0          # MK_* buttons the bot holds (background mode)
+        self._cursor = None     # last client point posted (background mode)
 
     # -- window geometry -------------------------------------------------
     def _find_window(self):
@@ -447,13 +484,19 @@ class GameWindow:
         import win32gui
         return win32gui.GetForegroundWindow() == self.hwnd
 
+    @property
+    def background(self):
+        return self.input_mode == "background"
+
     def _input_target(self, x, y):
         """Screen point for (x, y), once it is safe to send input there.
 
-        Waits while the game is not the foreground window, so input never
-        lands on another window. Returns None for points outside the game.
+        With real-mouse input, waits while the game is not the foreground
+        window, so input never lands on another window. Background input
+        goes to the game window only, so it needn't wait. Returns None for
+        points outside the game.
         """
-        while not self.is_foreground():
+        while not self.background and not self.is_foreground():
             if not self._input_paused:
                 log.warning("Game window is not in front; pausing until it is.")
                 self._input_paused = True
@@ -468,26 +511,113 @@ class GameWindow:
             return None
         return point
 
+    # Background input: window messages carry client coordinates and the
+    # buttons held, like the ones Windows sends for the real mouse.
+    #
+    # How Panda3D (the game engine) takes them, found live with the real
+    # cursor off the game (Nov 2026):
+    # * WM_MOUSEMOVE is useless: Panda then asks Windows to report the
+    #   cursor leaving, it isn't over the game, so WM_MOUSELEAVE follows at
+    #   once and the pointer counts as gone. Buttons clicked then are lost,
+    #   the hammer's target circle isn't drawn, scrubbing does nothing.
+    # * Any button-down moves the pointer and keeps it in the window. So a
+    #   hover is an X1 ("mouse4") press and release, which the game ignores,
+    #   a click is a left press with no move before it, and a drag steps
+    #   with repeated left presses.
+    # * Posted all at once, a saw cut reached the game as one jump; pace
+    #   every message like pyautogui does (BG_PAUSE).
+    def _post(self, msg, point, wparam=0, pause=True):
+        """Post a mouse message for screen ``point`` to the game window."""
+        if self not in _background_windows:
+            _background_windows.append(self)
+        cx, cy = point[0] - self.rect.left, point[1] - self.rect.top
+        self._cursor = (cx, cy)
+        ctypes.windll.user32.PostMessageW(self.hwnd, msg, self._held | wparam,
+                                          (cy & 0xFFFF) << 16 | (cx & 0xFFFF))
+        if pause:
+            time.sleep(BG_PAUSE)
+
+    def _post_hover(self, point):
+        """Put the game's pointer on ``point`` (see above), without a click."""
+        self._post(WM_XBUTTONDOWN, point, XBUTTON1 << 16 | MK_XBUTTON1, pause=False)
+        self._post(WM_XBUTTONUP, point, XBUTTON1 << 16)
+
+    def _at(self, point):
+        return self._cursor == (point[0] - self.rect.left, point[1] - self.rect.top)
+
+    def _post_button(self, down_msg, up_msg, flag, point, down, pause=True):
+        if down:
+            self._held |= flag
+            self._post(down_msg, point, pause=pause)
+        else:
+            self._held &= ~flag
+            self._post(up_msg, point, pause=pause)
+
+    def release_buttons(self):
+        """Release whatever the bot holds in the game (background mode)."""
+        if not self._held or self.hwnd is None or self._cursor is None:
+            return
+        point = (self.rect.left + self._cursor[0], self.rect.top + self._cursor[1])
+        if self._held & MK_LBUTTON:
+            self._post_button(WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON, point, False)
+        if self._held & MK_RBUTTON:
+            self._post_button(WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON, point, False)
+
     def click(self, x, y):
-        import pyautogui
         point = self._input_target(x, y)
-        if point:
+        if not point:
+            return
+        if self.background:
+            # Live: the game reads the pointer once a frame, so clicks
+            # posted back to back all landed on the last point. Hover a
+            # beat first, unless already there (hammering: the glow window
+            # is ~30 ms, so the press must go at once).
+            if not self._at(point):
+                self._post_hover(point)
+                time.sleep(BG_CLICK_HOVER)
+            self._post_button(WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON, point, True,
+                              pause=False)
+            try:
+                time.sleep(BG_CLICK_HOLD)
+            finally:
+                self._post_button(WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON, point, False)
+        else:
+            import pyautogui
             pyautogui.click(*point)
 
     def move(self, x, y):
-        import pyautogui
         point = self._input_target(x, y)
-        if point:
+        if not point:
+            return
+        if self.background:
+            if self._held & MK_LBUTTON:
+                self._post(WM_LBUTTONDOWN, point)     # a drag step
+            else:
+                self._post_hover(point)
+        else:
+            import pyautogui
             pyautogui.moveTo(*point)
 
     def mouse_down(self, x, y):
-        import pyautogui
         point = self._input_target(x, y)
-        if point:
+        if not point:
+            return
+        if self.background:
+            self._post_button(WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON, point, True)
+        else:
+            import pyautogui
             pyautogui.mouseDown(*point)
 
     def mouse_up(self, x, y):
         # Always release, even if the game lost focus mid-drag.
+        if self.background:
+            if self._held & MK_LBUTTON:
+                point = self.to_screen(x, y)
+                if not self.rect.contains(*point) and self._cursor is not None:
+                    point = (self.rect.left + self._cursor[0],
+                             self.rect.top + self._cursor[1])
+                self._post_button(WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON, point, False)
+            return
         import pyautogui
         pyautogui.mouseUp()
 
@@ -535,7 +665,16 @@ class GameWindow:
         """A deliberate right click (potions: rotate the pair in hand)."""
         import pyautogui
         point = self._input_target(x, y)
-        if point:
+        if point and self.background:
+            self._post_hover(point)
+            time.sleep(PRESS_HOVER)
+            self._post_button(WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON, point, True)
+            try:
+                time.sleep(PRESS_HOLD)
+            finally:
+                self._post_button(WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON, point, False)
+            time.sleep(PRESS_AFTER)
+        elif point:
             pyautogui.moveTo(*point)
             time.sleep(PRESS_HOVER)
             pyautogui.mouseDown(*point, button="right")
@@ -549,6 +688,9 @@ class GameWindow:
         """Move the cursor out of the way: top centre of the game, just below
         the edge. (Left centre sat over the crew list, and a lagged click
         landing there opened a crewmate's profile.)"""
+        if self.background:
+            self._post_hover(self.park_point())
+            return
         import pyautogui
         if self.is_foreground():
             pyautogui.moveTo(*self.park_point())

@@ -175,9 +175,10 @@ def test_input_outside_the_game_area_is_dropped(monkeypatch):
 
 
 def test_input_waits_while_the_game_is_in_the_background(monkeypatch):
+    """Real-mouse input must never land on another window."""
     import threading
     import screen
-    win = screen.GameWindow()
+    win = screen.GameWindow(input="mouse")
     win.hwnd, win.rect = 1, Rect(0, 23, 1920, 1017)
     monkeypatch.setattr(win, "is_foreground", lambda: False)
     monkeypatch.setattr(win, "refresh", lambda: win.rect)
@@ -190,6 +191,94 @@ def test_input_waits_while_the_game_is_in_the_background(monkeypatch):
     finally:
         timer.cancel()
         screen.reset_stop()
+
+
+@pytest.fixture
+def posted(monkeypatch):
+    """A background-input GameWindow whose window messages are recorded."""
+    import screen
+    win = screen.GameWindow(input="background")
+    win.hwnd, win.rect = 1, Rect(0, 23, 2560, 1369)
+    monkeypatch.setattr(win, "is_foreground", lambda: False)
+    monkeypatch.setattr(win, "refresh", lambda: win.rect)
+    sent = []
+
+    def post(msg, point, wparam=0, pause=True):
+        win._cursor = (point[0] - win.rect.left, point[1] - win.rect.top)
+        sent.append((msg, win._held | wparam, win._cursor))
+    monkeypatch.setattr(win, "_post", post)
+    monkeypatch.setattr(screen, "_background_windows", [win])
+    return win, sent
+
+
+def kinds(sent):
+    return [m for m, _, _ in sent]
+
+
+def test_background_click_hovers_then_presses_without_focus(posted):
+    """Live: a posted WM_MOUSEMOVE is chased by WM_MOUSELEAVE when the real
+    cursor is off the game, so the click was lost. A hover is an X1 press,
+    which keeps the pointer in the window."""
+    import screen
+    win, sent = posted
+    win.click(1280, 700)
+    assert kinds(sent) == [screen.WM_XBUTTONDOWN, screen.WM_XBUTTONUP,
+                           screen.WM_LBUTTONDOWN, screen.WM_LBUTTONUP]
+    assert sent[0][2] == (1280, 700 - 23)            # client coordinates
+    assert win._held == 0
+
+
+def test_background_click_on_the_hovered_point_presses_at_once(posted):
+    """Hammering: the nail is already hovered while waiting for the glow,
+    and the hit must land within ~30 ms of it."""
+    import screen
+    win, sent = posted
+    win.move(1280, 700)
+    sent.clear()
+    win.click(1280, 700)
+    assert kinds(sent) == [screen.WM_LBUTTONDOWN, screen.WM_LBUTTONUP]
+
+
+def test_background_input_never_posts_mouse_moves(posted):
+    import screen
+    win, sent = posted
+    win.move(1000, 600)
+    win.park_mouse()
+    win.press(1100, 600)
+    win.drag([(1000, 600), (1060, 600)], delay=0)
+    assert 0x0200 not in kinds(sent)
+
+
+def test_background_drag_moves_with_button_down_messages(posted):
+    """Live: sawing and bracing drags work when each step is a left press
+    at the new point, with the button flag set."""
+    import screen
+    win, sent = posted
+    win.drag([(1000, 600), (1060, 600)], delay=0)
+    first_down = kinds(sent).index(screen.WM_LBUTTONDOWN)
+    steps = sent[first_down + 1:-1]
+    assert len(steps) >= 4 and all(m == screen.WM_LBUTTONDOWN and h == screen.MK_LBUTTON
+                                   for m, h, _ in steps)
+    assert steps[-1][2] == (1060, 600 - 23)
+    assert sent[-1][0] == screen.WM_LBUTTONUP and win._held == 0
+
+
+def test_background_input_skips_points_outside_the_game(posted):
+    win, sent = posted
+    win.click(1280, 5000)
+    assert sent == []
+
+
+def test_stop_releases_only_the_buttons_posted_to_the_game(posted, monkeypatch):
+    """In background mode the real mouse is the player's: never touch it."""
+    import screen
+    win, sent = posted
+    real = []
+    monkeypatch.setattr(screen, "key_down", lambda vk: real.append(vk) or True)
+    win.mouse_down(1000, 600)
+    screen.release_mouse()
+    assert sent[-1][0] == screen.WM_LBUTTONUP and win._held == 0
+    assert real == []
 
 
 # -- kill switch -------------------------------------------------------------

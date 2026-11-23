@@ -3,8 +3,11 @@
 Run from anywhere:  python repair/repair_bind.py
 Options: --record saves frames of every game to debug_frames/, --debug logs more.
 F9 saves a debug frame of whatever is on screen.
+Input goes straight to the game window, so it can sit behind other windows
+and the mouse stays yours; keep the real cursor off the game while it runs.
+Set TLOPO_INPUT=mouse to drive the real cursor instead (game must be in front).
 Press ` (backtick) to stop. If the bot has not stopped 2 seconds later, the
-process is killed. Ctrl+C or moving the mouse into a screen corner also stop it.
+process is killed. Ctrl+C also stops it.
 """
 import logging
 import time
@@ -38,6 +41,10 @@ LAST_BUTTON = BilgePumping.button
 # Hull patching takes people the longest, so the bot takes it first and
 # leaves the quicker games to the crew.
 FIRST_BUTTON = HullPatching.button
+# Live: when the last game finishes, the ship is repaired and every button
+# resets, but that game's title lingers for a frame or two. Without a pause
+# it looked unfinished and was started again for a moment.
+FINISH_SETTLE = 3.0     # seconds a just-finished game isn't replayed
 
 
 def start_order(button, failed_starts):
@@ -55,6 +62,7 @@ class RepairBot:
         self.announced_done = False
         self.announced_waiting = False
         self.skipped = set()   # games that timed out on this ship
+        self.finished = None   # (name, monotonic time) of the game last won
 
     def active_game(self):
         """The minigame whose title is on screen, or None."""
@@ -104,6 +112,11 @@ class RepairBot:
                 last_click, clicks = time.monotonic(), clicks + 1
         return None
 
+    def just_finished(self, game):
+        """Did the bot win ``game`` in the last FINISH_SETTLE seconds?"""
+        return (self.finished is not None and self.finished[0] == game.name
+                and time.monotonic() - self.finished[1] < FINISH_SETTLE)
+
     def repair_window_open(self):
         """A fresh look: is the repair window (a game or the bar) on screen?"""
         return self.active_game() is not None or repair_bar_visible(self.win)
@@ -114,8 +127,12 @@ class RepairBot:
         snapshots.take_requested(self.win)
         shown = self.active_game()
         if shown and not shown.is_completed() and shown.name not in self.skipped:
+            if self.just_finished(shown):
+                wait(0.1)                  # its title is on its way out
+                return
             try:
-                shown.play()
+                if shown.play():
+                    self.finished = (shown.name, time.monotonic())
                 if shown.timed_out:
                     # Don't restart a game that can't be finished; do the rest.
                     log.warning("Skipping %s for the rest of this ship", shown.name)
