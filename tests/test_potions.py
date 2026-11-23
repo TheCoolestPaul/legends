@@ -261,3 +261,10 @@ def test_unmade_recipe_colour_comes_from_the_border():
     """Live: Pincer Potion's grey Crab Soul (blue 6) was read as purple 6;
     unmade icons are grey, the border says blue."""
     assert table("pincer_start").read_recipe() == Counter({("blue", 6): 1})
+
+
+def test_grey_recipe_icons_with_weak_matches_still_count():
+    """Live: Pantano Silver Spirit III's grey Venom Gem (red 5) matched at
+    0.76, under the board threshold, and the recipe lost a slot."""
+    assert table("pantano_start").read_recipe() == Counter(
+        {("red", 5): 1, ("blue", 5): 1, ("green", 5): 1, ("green", 4): 1})

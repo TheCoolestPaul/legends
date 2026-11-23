@@ -84,6 +84,7 @@ BORDER_COLOURS = {
     None: (195, 173, 126),               # bare parchment: no slot here
 }
 MIN_BORDER_PIXELS = 300                  # fewer coloured pixels: a gray border
+RECIPE_MIN_SCORE = 0.5                   # tier match within a known border colour
 MATCH_WAIT = 1.5                         # s for the board to reach the prediction
 DROP_HOLD = 0.05                         # s the button is held to drop a pair
 PIECE_SCALE = 0.84                       # board pieces vs the ingredient chart
@@ -263,16 +264,18 @@ class PotionTable:
         """The ingredient in recipe slot ``i``, or None. The icon gives the
         tier; the border gives the colour (unmade icons are grey)."""
         x, y = recipe_centre(i)
-        piece, _ = self.piece_at(x, y)
-        if piece is None:
-            return None
         colour = self.border_colour(x, y)
-        if colour is None or colour == piece[0]:
-            return piece
+        if colour is None:                  # no slot here, or a gray border
+            return self.piece_at(x, y)[0]
         tmpl, patch = self._patch(x, y)
-        tiers = [(float(cv2.matchTemplate(patch, t, cv2.TM_CCOEFF_NORMED).max()), key)
-                 for key, t in tmpl.items() if key[0] == colour]
-        return max(tiers)[1] if tiers else piece
+        if patch is None:
+            return None
+        # Grey icons match less well than board pieces (live: a grey Venom
+        # Gem, red 5, scored 0.76, the next tier 0.38), but the border has
+        # already said there's an ingredient of this colour here.
+        score, piece = max((float(cv2.matchTemplate(patch, t, cv2.TM_CCOEFF_NORMED).max()), key)
+                           for key, t in tmpl.items() if key[0] == colour)
+        return piece if score >= RECIPE_MIN_SCORE else None
 
     def border_colour(self, x, y):
         """Colour of the hex border around ref (x, y): a BORDER_COLOURS key,
