@@ -726,3 +726,16 @@ def test_press_hovers_before_it_clicks(monkeypatch):
     assert win.actions == [("move", at), ("sleep", screen.PRESS_HOVER), ("down", at),
                            ("sleep", screen.PRESS_HOLD), ("up", at),
                            ("sleep", screen.PRESS_AFTER)]
+
+
+def test_the_saw_is_held_still_before_and_after_it_is_picked_up(monkeypatch):
+    """Live: a plank was sometimes cut twice, the saw never picked up; the
+    jump onto it, the press and the first move fell inside one frame."""
+    from plank_sawing import PLANKS, SAW_GRAB, PlankSawing
+    win = live("plank_letter_n")
+    monkeypatch.setattr(screen.time, "sleep", lambda s: win.actions.append(("sleep", s)))
+    PlankSawing(win).saw(PLANKS["letter_n"])
+    start = win.to_screen(*PLANKS["letter_n"][0])
+    assert win.actions[:4] == [("move", start), ("sleep", SAW_GRAB),
+                               ("down", start), ("sleep", SAW_GRAB)]
+    assert win.actions[4][0] == "move" and win.actions[-1][0] == "up"

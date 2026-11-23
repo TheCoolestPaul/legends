@@ -18,6 +18,10 @@ NO_PLANK_WAIT = 0.1    # seconds between looks while no plank is ready
 # Live: cuts were "Perfect" but sometimes didn't register as going all the
 # way through; carrying on past the plank's edge makes the exit unambiguous.
 SAW_OVERSHOOT = 60     # ref px past the last point, same direction
+# Live: the same plank was sometimes cut twice, as if the saw was never
+# picked up: the cursor jumped onto it, pressed and moved off within one
+# lagging frame. Rest on the saw before and after pressing.
+SAW_GRAB = 0.04        # seconds, each side of the press
 
 
 def overshoot(path, distance):
@@ -62,7 +66,7 @@ class PlankSawing(RepairMiniGame):
         # Live: jumping corner to corner failed most cuts; 15 px steps with
         # pauses worked but was slower than needed; 40 px steps at input
         # pace (~0.3 s per cut) work reliably, 70 px steps did not.
-        self.win.drag(overshoot(path, SAW_OVERSHOOT), step=SAW_STEP, delay=0)
+        self.win.drag(overshoot(path, SAW_OVERSHOOT), step=SAW_STEP, delay=0, grab=SAW_GRAB)
 
     def step(self):
         self.win.park_mouse()

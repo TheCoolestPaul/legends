@@ -505,16 +505,22 @@ class GameWindow:
             self.mouse_up(x, y)
         time.sleep(PRESS_AFTER)
 
-    def drag(self, path, step=DRAG_STEP, delay=DRAG_DELAY):
+    def drag(self, path, step=DRAG_STEP, delay=DRAG_DELAY, grab=0.0):
         """Hold the left button and move along ``path`` (ref points) smoothly.
 
         The game samples the cursor once per frame, so jumping straight
         between corners looks like leaving the line; this moves in small
-        steps instead. The button is always released, even on a stop.
+        steps instead. ``grab`` seconds are spent hovering before the press
+        and again holding still after it, so a lagging game sees the cursor
+        on what it picks up. The button is always released, even on a stop.
         """
         self.move(*path[0])
+        if grab:
+            time.sleep(grab)
         self.mouse_down(*path[0])
         try:
+            if grab:
+                time.sleep(grab)
             for (x0, y0), (x1, y1) in zip(path, path[1:]):
                 n = max(1, math.ceil(math.hypot(x1 - x0, y1 - y0) / step))
                 for i in range(1, n + 1):
