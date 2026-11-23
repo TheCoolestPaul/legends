@@ -29,17 +29,37 @@ EASY = 15               # first-look wins (of GAMES) that settle it at once
 # ahead 10-8, while 32 fresh games had lanes ahead 24-13; at ~60% wins, 16
 # games swing by 2-3 either way.
 MIN_WIN = 0.7           # below this the bot skips the recipe (unless --any-tier)
-# Colours dealt can't be known before play starts. Recipes so far dealt red,
-# green and blue, some also purple; plan for four, the harder case, so a
-# recipe that passes here is at least as likely to be won live.
+# Colours dealt aren't known before play starts: they vary by island (red,
+# green and blue everywhere so far; some add purple or gray). Until a
+# recipe's colours have been seen, plan for four, the harder case, so a
+# recipe that passes is at least as likely to be won live. The bot then
+# re-plans for the colours actually dealt (and remembers them).
 POOL = simulate.RGBP
 SEED = 2026
+POOLS = "_pools"        # plans.json: {recipe slots: colours last dealt}
+
+
+def slots_key(needs):
+    """A stable text key for a recipe's open slots."""
+    return ",".join("%s%dx%d" % (c, t, n) for (c, t), n in sorted(needs.items()) if n > 0)
 
 
 def recipe_key(needs, pool=POOL):
-    """A stable text key for a recipe's open slots and the colours assumed."""
-    slots = ",".join("%s%dx%d" % (c, t, n) for (c, t), n in sorted(needs.items()) if n > 0)
-    return "%s|%s" % (slots, "".join(sorted(c[0] for c in pool)))
+    """Key for a plan: the recipe's open slots and the colours dealt. Full
+    colour names (gray and green share an initial)."""
+    return "%s|%s" % (slots_key(needs), "+".join(sorted(pool)))
+
+
+def known_pool(needs):
+    """The colours this recipe was last dealt, or None."""
+    pool = load().get(POOLS, {}).get(slots_key(needs))
+    return tuple(sorted(pool)) if pool else None
+
+
+def remember_pool(needs, pool):
+    plans = load()
+    plans.setdefault(POOLS, {})[slots_key(needs)] = sorted(pool)
+    save(plans)
 
 
 def _one(job):

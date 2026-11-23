@@ -13,6 +13,7 @@ front.
 """
 import logging
 import sys
+import threading
 import time
 from collections import Counter
 from functools import lru_cache
@@ -101,6 +102,9 @@ AIM_Y = ROW0_Y[0] - 4 * ROW_PITCH        # cursor height while aiming (mid board
 AIM_TIMEOUT = 4.0                        # s for the pair to follow the cursor
 AIM_RESEND = 0.5                         # re-send the cursor move this often
 AIM_RETRIES = 3                          # turns in a row the pair may fail to follow
+# Pairs dealt before the bot trusts which colours this island deals. With
+# four colours, one is missing from 24 pieces about 0.1% of the time.
+POOL_CHECK_PAIRS = 12
 # Recipes are normally judged by a simulated plan (planner.py). If planning
 # fails, fall back to this: every tier-3 and tier-4 recipe won in simulation;
 # tier 5 depends on the recipe and tier 6 (Pincer Potion) won ~25%.
@@ -461,6 +465,11 @@ class Brewer:
         self.pool = {"red", "green", "blue"}   # colours being dealt
         self.any_tier = any_tier
         self.strategy, self.evaluate = "standard", None
+        self.recipe = None                  # the needs this plan is for
+        self.plan_pool = None               # colours the current plan assumes
+        self.dealt, self.dealt_pairs = set(), 0
+        self.pool_checked = False
+        self.replan = None                  # background re-plan: {"pool", "result"/"error"}
 
     def choose_plan(self, needs):
         """Pick a strategy for this recipe from a simulated plan (planner.py)
@@ -471,9 +480,11 @@ class Brewer:
         try:
             import planner
             from brewing import scorer
-            p = planner.plan(needs)
+            self.recipe = Counter(needs)
+            self.plan_pool = planner.known_pool(needs) or planner.POOL
+            p = planner.plan(needs, self.plan_pool)
             self.strategy = p["strategy"]
-            self.evaluate = scorer(self.strategy, needs, planner.POOL)
+            self.evaluate = scorer(self.strategy, needs, self.plan_pool)
         except Exception:
             log.exception("Couldn't plan this recipe; using the tier %d limit", MAX_TIER_PLAYED)
             top = max(k for _, k in needs)
@@ -482,13 +493,56 @@ class Brewer:
                             "plays it anyway).", top)
                 return False
             return True
-        log.info("Plan: %s strategy, simulated %.0f%% wins, median %s turns.",
-                 self.strategy, 100 * p["win"], p["median_turns"])
+        log.info("Plan for %s: %s strategy, simulated %.0f%% wins, median %s turns.",
+                 "/".join(self.plan_pool), self.strategy, 100 * p["win"], p["median_turns"])
         if p["win"] < planner.MIN_WIN and not self.any_tier:
             log.warning("Skipping this recipe: simulated, the bot wins only %.0f%% of the time "
                         "(--any-tier plays it anyway).", 100 * p["win"])
             return False
         return True
+
+    def note_dealt(self, pair):
+        """Track the colours being dealt. After POOL_CHECK_PAIRS pairs they're
+        known; remember them for this recipe and, if the plan assumed other
+        colours, re-plan for the real ones in the background."""
+        self.dealt.update(c for c, _ in pair if c != UNKNOWN[0])
+        self.dealt_pairs += 1
+        if self.recipe is None or self.pool_checked or self.dealt_pairs < POOL_CHECK_PAIRS:
+            return
+        self.pool_checked = True
+        import planner
+        seen = tuple(sorted(self.dealt))
+        planner.remember_pool(self.recipe, seen)
+        if set(seen) == set(self.plan_pool):
+            return
+        log.info("This island deals %s, not the %s planned for; re-planning in the "
+                 "background.", "/".join(seen), "/".join(self.plan_pool))
+        job = {"pool": seen}
+
+        def run():
+            try:
+                job["result"] = planner.plan(self.recipe, seen)
+            except Exception as e:          # reported when applied
+                job["error"] = e
+        self.replan = job
+        threading.Thread(target=run, name="replan", daemon=True).start()
+
+    def apply_replan(self):
+        """Switch to the background re-plan once it's ready."""
+        job = self.replan
+        if job is None or not ("result" in job or "error" in job):
+            return
+        self.replan = None
+        if "error" in job:
+            log.warning("Re-planning failed (%s); keeping the current plan.", job["error"])
+            return
+        from brewing import scorer
+        p = job["result"]
+        self.plan_pool = job["pool"]
+        self.strategy = p["strategy"]
+        self.evaluate = scorer(self.strategy, self.recipe, self.plan_pool)
+        log.info("Plan for %s: %s strategy, simulated %.0f%% wins, median %s turns.",
+                 "/".join(self.plan_pool), self.strategy, 100 * p["win"], p["median_turns"])
 
     def play(self):
         """Play until the potion is done or there's no pair to place."""
@@ -522,6 +576,8 @@ class Brewer:
             for col in cols:
                 self.pool.update(c for c, _ in col if c != UNKNOWN[0])
             self.pool.update(c for c, _ in pair + (nxt or ()))
+            self.note_dealt(pair)
+            self.apply_replan()
             move = best_move(board, pair, nxt, pool=self.pool, evaluate=self.evaluate)
             t1 = time.monotonic()
             if move is None:

@@ -352,7 +352,7 @@ def _brewer_with_plan(monkeypatch, win, any_tier=False, fail=False):
     import planner
     from brew_bot import Brewer
 
-    def fake_plan(needs):
+    def fake_plan(needs, pool=None):
         if fail:
             raise RuntimeError("no simulation")
         return {"strategy": "lanes", "win": win, "median_turns": 100, "results": {}}
@@ -393,3 +393,72 @@ def test_nothing_happens_away_from_the_potion_table():
     brewer = Brewer(win)
     brewer.play()
     assert brewer.result == "no table" and win.actions == []
+
+
+# -- learning each island's colours -------------------------------------------------
+def test_plan_keys_tell_gray_from_green():
+    import planner
+    needs = Counter({("red", 3): 1})
+    assert planner.recipe_key(needs, ("red", "green", "blue")) !=         planner.recipe_key(needs, ("red", "gray", "blue"))
+
+
+def test_a_recipes_colours_are_remembered(monkeypatch, tmp_path):
+    import planner
+    monkeypatch.setattr(planner, "PLANS", tmp_path / "plans.json")
+    needs = Counter({("blue", 4): 5})
+    assert planner.known_pool(needs) is None
+    planner.remember_pool(needs, ("red", "blue", "green"))
+    assert planner.known_pool(needs) == ("blue", "green", "red")
+
+
+def _brewer_learning(monkeypatch, tmp_path, planned_for):
+    import planner
+    from brew_bot import Brewer
+    monkeypatch.setattr(planner, "PLANS", tmp_path / "plans.json")
+    calls = []
+
+    def fake_plan(needs, pool=None):
+        calls.append(tuple(sorted(pool)))
+        return {"strategy": "standard", "win": 1.0, "median_turns": 50 if len(pool) == 3 else 100,
+                "results": {}}
+    monkeypatch.setattr(planner, "plan", fake_plan)
+    brewer = Brewer(table("board_start").win)
+    if planned_for:
+        planner.remember_pool(Counter({("blue", 4): 5}), planned_for)
+    assert brewer.choose_plan(Counter({("blue", 4): 5}))
+    return brewer, calls
+
+
+def _deal(brewer, colours, pairs=12):
+    for i in range(pairs):
+        brewer.note_dealt(((colours[i % len(colours)], 1), (colours[(i + 1) % len(colours)], 1)))
+
+
+def test_dealt_colours_trigger_a_background_replan(monkeypatch, tmp_path):
+    """Live: a red/green/blue island, planned for four colours, expected 106
+    turns per potion and took 35-65."""
+    import time
+    import planner
+    brewer, calls = _brewer_learning(monkeypatch, tmp_path, None)
+    assert calls == [tuple(sorted(planner.POOL))]           # four colours to start
+    _deal(brewer, ("red", "green", "blue"))
+    deadline = time.monotonic() + 2
+    while brewer.replan and "result" not in brewer.replan and time.monotonic() < deadline:
+        time.sleep(0.01)
+    brewer.apply_replan()
+    assert brewer.plan_pool == ("blue", "green", "red")
+    assert calls[-1] == ("blue", "green", "red")
+    assert planner.known_pool(Counter({("blue", 4): 5})) == ("blue", "green", "red")
+
+
+def test_known_colours_are_planned_for_at_once(monkeypatch, tmp_path):
+    brewer, calls = _brewer_learning(monkeypatch, tmp_path, ("red", "green", "blue"))
+    assert calls == [("blue", "green", "red")]
+    _deal(brewer, ("red", "green", "blue"))
+    assert brewer.replan is None and len(calls) == 1         # nothing to re-plan
+
+
+def test_colours_arent_judged_too_early(monkeypatch, tmp_path):
+    brewer, calls = _brewer_learning(monkeypatch, tmp_path, None)
+    _deal(brewer, ("red", "green", "blue"), pairs=5)
+    assert brewer.replan is None and not brewer.pool_checked
