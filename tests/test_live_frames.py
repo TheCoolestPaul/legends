@@ -632,6 +632,25 @@ def test_own_game_in_progress_still_plays(bot_on, monkeypatch):
     assert played == ["hull_scrubbing"]
 
 
+def test_a_game_just_won_is_not_started_again(bot_on, monkeypatch):
+    """Live: scrubbing was the last game; on winning it the ship was repaired
+    and every button reset while its title lingered, so it looked unfinished
+    and play() started again. A just-won game is left alone for a moment."""
+    import repair_bind
+    monkeypatch.setattr(repair_bind, "wait", lambda s: None)
+    bot = bot_on("scrubbing_play")              # title up, no green check
+    played = []
+    monkeypatch.setattr(HullScrubbing, "play",
+                        lambda self: played.append(self.name) or True)
+    bot.tick()
+    bot.tick()                                  # same frame straight after
+    assert played == ["hull_scrubbing"] and clicks(bot.win) == []
+    name, won_at = bot.finished
+    bot.finished = (name, won_at - repair_bind.FINISH_SETTLE)
+    bot.tick()                                  # long after: a new ship's game
+    assert played == ["hull_scrubbing"] * 2
+
+
 def test_no_input_until_a_beat_after_the_banner_goes(monkeypatch):
     """Live: games still started early, because input stays ignored for a
     moment after the banner disappears. play() waits BANNER_GRACE first."""
