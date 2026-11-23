@@ -49,7 +49,7 @@ def test_fresh_repair_window(bot_on):
     assert repair_bar_visible(win)
     assert [button_completed(win, b) for b in BUTTONS] == [False] * 5
     bot.tick()
-    assert clicks(win) == [win.to_screen(*BUTTONS[0])]     # starts with the first button
+    assert clicks(win) == [win.to_screen(*BUTTONS[1])]     # pumping/scrubbing slot goes last
 
 
 def test_scrubbing_in_progress(bot_on):
@@ -742,3 +742,11 @@ def test_the_saw_is_held_still_before_and_after_it_is_picked_up(monkeypatch):
     assert win.actions[:4] == [("move", start), ("sleep", SAW_GRAB),
                                ("down", start), ("sleep", SAW_GRAB)]
     assert win.actions[4][0] == "move" and win.actions[-1][0] == "up"
+
+
+def test_pumping_is_left_until_the_other_games_are_done(bot_on):
+    """The bot is faster than people at every game but bilge pumping, which
+    takes ~10 s however it's played: it takes the others first."""
+    bot = bot_on("repair_start")                    # nothing done yet
+    bot.tick()
+    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]

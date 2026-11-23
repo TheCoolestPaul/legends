@@ -31,6 +31,10 @@ START_WAIT = 6          # seconds to wait for a clicked button's game to open
 RECLICK_EVERY = 1.0     # click the button again this often until its game opens
 SLOW_OPEN = 1.5         # log how long a game took to open beyond this
 WINDOW_CLOSED = object()  # wait_for_game(): the repair window went away
+# Bilge pumping (this slot at sea; hull scrubbing in port) takes ~10 s
+# however well it's played, while the bot beats people at the other games.
+# Leave pumping to the crew and take it only once nothing else is open.
+LAST_BUTTON = BilgePumping.button
 
 
 class RepairBot:
@@ -133,8 +137,8 @@ class RepairBot:
         # yellow progress ring and won't open for us. Leave them be.
         pending = [b for b in open_buttons if not button_in_progress(self.win, b)]
         # A button that failed to open goes to the back of the queue, so the
-        # others get a turn before it's tried again.
-        pending.sort(key=lambda b: self.failed_starts.get(b, 0))
+        # others get a turn before it's tried again; pumping goes last.
+        pending.sort(key=lambda b: (self.failed_starts.get(b, 0), b == LAST_BUTTON))
         if open_buttons and not pending:
             if not self.announced_waiting:
                 log.info("Waiting for other players to finish their repairs.")
