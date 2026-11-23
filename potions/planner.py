@@ -9,6 +9,7 @@ are cached in plans.json next to this file, so later brews start at once.
 """
 import json
 import logging
+import os
 import random
 import statistics
 import time
@@ -54,6 +55,9 @@ def play_games(needs, pool, games, first=0, workers=None):
     needs = [(k, n) for k, n in needs.items() if n > 0]
     jobs = [(s, needs, pool, SEED + first + i) for s in STRATEGIES for i in range(games)]
     results = {s: [] for s in STRATEGIES}
+    # Leave the game a couple of cores: live, the first move after planning
+    # on every core went unnoticed by the game.
+    workers = workers or max(1, (os.cpu_count() or 4) - 2)
     with ProcessPoolExecutor(max_workers=workers) as ex:
         for strategy, won, turns in ex.map(_one, jobs, chunksize=1):
             results[strategy].append((won, turns))

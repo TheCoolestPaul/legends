@@ -98,6 +98,9 @@ MIN_SCORE = 0.8                          # below this a cell is empty
 STEADY = 0.5
 TURN_TIMEOUT = 12.0                      # seconds to wait for the next pair
 AIM_Y = ROW0_Y[0] - 4 * ROW_PITCH        # cursor height while aiming (mid board)
+AIM_TIMEOUT = 4.0                        # s for the pair to follow the cursor
+AIM_RESEND = 0.5                         # re-send the cursor move this often
+AIM_RETRIES = 3                          # turns in a row the pair may fail to follow
 # Recipes are normally judged by a simulated plan (planner.py). If planning
 # fails, fall back to this: every tier-3 and tier-4 recipe won in simulation;
 # tier 5 depends on the recipe and tier 6 (Pincer Potion) won ~25%.
@@ -338,10 +341,18 @@ class PotionTable:
     def hold_over(self, c, pair=None):
         """Move the pair in hand over columns c, c+1; returns the hand once
         it is there, or None. Knowing ``pair`` makes each check quick."""
-        self.win.move(aim_x(c), AIM_Y)
-        deadline = time.monotonic() + 2.0
+        x = aim_x(c)
+        self.win.move(x, AIM_Y)
+        deadline = time.monotonic() + AIM_TIMEOUT
+        last_move, nudge = time.monotonic(), 1
         while time.monotonic() < deadline:
             check_stop()
+            # Live: right after planning (all cores busy) the game missed the
+            # move and the pair stayed put; re-send it, a pixel off, so the
+            # game sees fresh movement (same fix as the hammering bot).
+            if time.monotonic() - last_move >= AIM_RESEND:
+                self.win.move(x + nudge, AIM_Y)
+                nudge, last_move = -nudge, time.monotonic()
             if pair is not None:
                 self.look()
                 for held in (pair, pair[::-1]):
@@ -496,7 +507,7 @@ class Brewer:
             self.result = "too hard"
             return
         cols, hand = t.wait_settled()
-        turns = 0
+        turns = lost = 0
         while hand:
             check_stop()
             snapshots.take_requested(self.win, "potions")
@@ -523,9 +534,15 @@ class Brewer:
             held = t.hold_over(c, pair)
             t2 = time.monotonic()
             if held is None:
-                log.warning("The pair didn't follow the cursor to column %d", c)
+                lost += 1
+                log.warning("The pair didn't follow the cursor to column %d (%d/%d)",
+                            c, lost, AIM_RETRIES)
                 snapshots.save(self.win, "hand_lost", "potions")
-                break
+                if lost >= AIM_RETRIES:
+                    break
+                cols, hand = t.wait_settled()
+                continue
+            lost = 0
             if (held[0], held[1]) != want:
                 held = t.rotate(held)
                 if held is None or (held[0], held[1]) != want:
