@@ -30,6 +30,7 @@ TITLE_THRESHOLD = 0.8  # measured: right title 0.97, best wrong title 0.66
 BUTTONS = [Point(840, 1226), Point(1061, 1226), Point(1275, 1226),
            Point(1500, 1226), Point(1715, 1226)]
 COMPLETED_GREEN_FRACTION = 0.05  # measured: done 0.15, not done 0.00
+STILL_OPEN_CACHE = 0.1  # seconds a still_open() answer is reused
 
 # A piece of the button bar's wood, used to tell that the repair UI is open.
 BAR_MARKER = "repair_bar.png"
@@ -131,6 +132,20 @@ class RepairMiniGame:
 
     def is_completed(self):
         return button_completed(self.win, self.button)
+
+    def still_open(self):
+        """Is this game still on screen? Call before acting inside a long
+        step: on a crewed ship someone else can finish the repair and the
+        panel vanishes mid-step. Cached for STILL_OPEN_CACHE seconds."""
+        now = time.monotonic()
+        cached = getattr(self, "_open_cache", None)
+        if cached is not None and now - cached[0] < STILL_OPEN_CACHE:
+            return cached[1]
+        open_now = self.is_active()
+        self._open_cache = (now, open_now)
+        if not open_now:
+            log.info("%s is no longer on screen; stopping", self.name)
+        return open_now
 
     # -- control ----------------------------------------------------------
     def start(self):

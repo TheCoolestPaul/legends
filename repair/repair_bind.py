@@ -29,6 +29,7 @@ GAME_CLASSES = [HullScrubbing, BilgePumping, PlankSawing, HullBracing,
 MAX_START_ATTEMPTS = 3  # per button, before skipping it until the bar resets
 START_WAIT = 6          # seconds to wait for a clicked button's game to open
 RECLICK_AFTER = 2.0     # click the button again if nothing has opened by then
+WINDOW_CLOSED = object()  # wait_for_game(): the repair window went away
 
 
 class RepairBot:
@@ -69,6 +70,11 @@ class RepairBot:
             game = self.active_game()
             if game is not None and game.button == button:
                 return game
+            if game is None and not repair_bar_visible(self.win):
+                # Live: the player left the repair window (went to a cannon)
+                # mid-wait, and the re-click below landed on the cannon view.
+                log.info("Repair window closed; not clicking")
+                return WINDOW_CLOSED
             if not reclicked and time.monotonic() - started > RECLICK_AFTER:
                 # Live: the click right after a game finishes is sometimes
                 # ignored outright; a second click opens it at once.
@@ -76,6 +82,10 @@ class RepairBot:
                 self.win.park_mouse()
                 reclicked = True
         return None
+
+    def repair_window_open(self):
+        """A fresh look: is the repair window (a game or the bar) on screen?"""
+        return self.active_game() is not None or repair_bar_visible(self.win)
 
     def tick(self):
         """One pass of the main loop."""
@@ -122,9 +132,13 @@ class RepairBot:
             return
         self.announced_done = False
         button = pending[0]
+        if not self.repair_window_open():   # it may have closed since we looked
+            return
         self.win.click(*button)
         self.win.park_mouse()
         opened = self.wait_for_game(button)
+        if opened is WINDOW_CLOSED:
+            return
         if opened is not None:
             if opened.is_completed():
                 log.info("%s: nothing to repair on this ship", opened.name)

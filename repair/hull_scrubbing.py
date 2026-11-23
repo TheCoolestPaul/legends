@@ -42,6 +42,8 @@ class HullScrubbing(RepairMiniGame):
         self.found("dirt")
         for spot in spots:
             check_stop()
+            if not self.still_open():
+                return
             self.win.move(*spot)
 
 

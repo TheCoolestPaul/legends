@@ -101,6 +101,8 @@ class Hammering(RepairMiniGame):
         deadline = time.monotonic() + HAMMER_WINDOW
         while time.monotonic() < deadline:
             check_stop()
+            if not self.still_open():
+                return None
             frac = self.glow_fraction(nail)
             self._trace_poll(nail, frac)
             if frac >= GLOW_FRACTION:

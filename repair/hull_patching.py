@@ -74,6 +74,8 @@ class HullPatching(RepairMiniGame):
         self.found("leaks")
         for leak in leaks:
             check_stop()
+            if not self.still_open():
+                return
             self.win.click(*leak)
 
 

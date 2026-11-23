@@ -233,6 +233,8 @@ class HullBracing(RepairMiniGame):
         ignored, and every later move then works on the wrong board.
         Returns True once the tile has moved."""
         for attempt in range(1 + FIRST_MOVE_RETRIES):
+            if not self.still_open():
+                return False
             self.slide(src, dst)
             deadline = time.monotonic() + MOVE_CHECK_TIME
             while True:
@@ -272,11 +274,14 @@ class HullBracing(RepairMiniGame):
             return
         log.info("Solution: %d moves", len(moves))
         if moves and not self.slide_checked(*moves[0]):
-            log.warning("First slide never took; re-reading the board")
-            self.snapshot("first_move_failed")
+            if self.still_open():
+                log.warning("First slide never took; re-reading the board")
+                self.snapshot("first_move_failed")
             return
         for src, dst in moves[1:]:
             check_stop()
+            if not self.still_open():
+                return
             self.slide(src, dst)
 
 

@@ -158,6 +158,34 @@ def test_bracing_gives_up_on_a_first_slide_that_never_takes(monkeypatch, snapsho
     assert len(list(snapshot_dir.glob("*first_move_failed*.png"))) == 1
 
 
+@pytest.mark.parametrize("name, act", [
+    ("bracing_play", lambda g: g.step()),
+    ("patching_two_new_leaks", lambda g: g.step()),
+    ("hammering_ready", lambda g: g.wait_for_glow(Point(895, 639))),
+])
+def test_no_input_once_the_game_has_vanished(monkeypatch, name, act):
+    """On a crewed ship someone else can finish the repair and the panel
+    vanishes mid-step; the bot must stop clicking straight away."""
+    import hull_bracing
+    from hull_patching import HullPatching
+    monkeypatch.setattr(hull_bracing, "wait", lambda s: None)
+    win = live(name)
+    game = {"bracing_play": HullBracing, "patching_two_new_leaks": HullPatching,
+            "hammering_ready": Hammering}[name](win)
+    monkeypatch.setattr(game, "still_open", lambda: False)
+    act(game)
+    assert [k for k, _ in win.actions if k in ("click", "down")] == []
+
+
+def test_still_open_is_cached_briefly():
+    win = live("bracing_play")
+    game = HullBracing(win)
+    calls = []
+    game.is_active = lambda: calls.append(1) or True
+    assert game.still_open() and game.still_open()
+    assert len(calls) == 1
+
+
 def test_bracing_won_board_needs_no_moves(monkeypatch):
     import hull_bracing
     monkeypatch.setattr(hull_bracing, "wait", lambda s: None)
@@ -360,6 +388,113 @@ def test_open_hole_found_not_the_streaming_patch():
     from hull_patching import HullPatching
     leaks = HullPatching(live("patching_hole_and_old_patches")).find_leaks()
     assert [(p.x, p.y) for p in leaks] == [(923, 649)]
+
+
+# -- bilge pumping --------------------------------------------------------------
+def gauge_playback(monkeypatch, fixture="bilge_gauge"):
+    """Replay a recorded stretch of the gauge on a fake clock. Returns (game,
+    clock, clicks, rod_y_at(t)). Each grab shows the frame at clock time."""
+    import types
+    import bilge_pumping
+    from bilge_pumping import BilgePumping, rod_row
+    data = np.load(LIVE / (fixture + ".npz"))
+    frames, times = data["frames"], data["times"]
+    top, left = int(data["top"]), int(data["left"])
+    clock = types.SimpleNamespace(now=0.0)
+    fake_time = types.SimpleNamespace(monotonic=lambda: clock.now,
+                                      sleep=lambda s: setattr(clock, "now", clock.now + s))
+    monkeypatch.setattr(bilge_pumping, "time", fake_time)
+    win = ImageWindow(np.zeros((1369, 2560, 3), np.uint8), Rect(0, 0, 2560, 1369))
+
+    def frame_at(t):
+        return frames[min(len(frames) - 1, int(np.searchsorted(times, t)))]
+
+    def capture(x, y, w, h):
+        clock.now += 0.001                          # a grab takes ~1 ms
+        y0, x0 = top - 23, left                     # ref -> this window's pixels
+        f = frame_at(clock.now)
+        win.image[y0:y0 + f.shape[0], x0:x0 + f.shape[1]] = f
+        return win.image[y:y + h, x:x + w]
+    monkeypatch.setattr(win, "_capture_client", capture)
+
+    def rod_y_at(t):
+        row = rod_row(frame_at(t), 1.0)
+        return None if row is None else top + row
+
+    clicks = []
+
+    def click(x, y):
+        clock.now += 0.010                          # a click takes ~10 ms
+        clicks.append(clock.now)
+    monkeypatch.setattr(win, "click", click)
+    game = BilgePumping(win)
+    monkeypatch.setattr(game, "still_open", lambda: True)   # only the gauge is drawn
+    return game, clock, clicks, rod_y_at
+
+
+@pytest.mark.parametrize("fixture, reaches", [("bilge_gauge", "top"),
+                                              ("bilge_gauge_bottom", "bottom")])
+def test_rod_is_tracked_into_each_end_of_the_gauge(fixture, reaches):
+    from bilge_pumping import rod_row
+    data = np.load(LIVE / (fixture + ".npz"))
+    ys = [rod_row(f, 1.0) for f in data["frames"]]
+    ys = [int(data["top"]) + y for y in ys if y is not None]
+    assert len(ys) >= 30
+    if reaches == "top":
+        assert min(ys) < 530                       # up into the top green zone
+    else:
+        assert max(ys) > 910                       # down into the bottom one
+
+
+@pytest.mark.parametrize("fixture, zone", [
+    ("bilge_gauge", (519, 572)),            # green zone at the top, rod rising fast
+    ("bilge_gauge_bottom", (867, 917)),     # zone moved to the bottom, rod slower
+])
+def test_bilge_pumps_once_while_the_rod_is_in_the_green(monkeypatch, fixture, zone):
+    """The zone jumps between the ends of the gauge after each pump; the bot
+    finds it on screen and only clicks if the click will land in it."""
+    game, clock, clicks, rod_y_at = gauge_playback(monkeypatch, fixture)
+    game.step()
+    assert len(clicks) == 1                         # one pump per pass
+    y = rod_y_at(clicks[0])                         # where the rod was as it landed
+    assert zone[0] <= y <= zone[1], (y, game.info)
+
+
+# -- the repair window going away ----------------------------------------------
+def test_no_clicks_when_the_player_is_at_a_cannon(monkeypatch):
+    import repair_bind
+    screen.reset_stop()
+    monkeypatch.setattr(repair_bind, "wait", lambda s: None)
+    bot = RepairBot(live("at_cannon"))
+    bot.tick()
+    assert clicks(bot.win) == []
+
+
+def test_window_closing_while_waiting_stops_the_reclick(monkeypatch, snapshot_dir):
+    """Regression (live): after clicking a button the player went to a
+    cannon; the re-click fired anyway and landed on the cannon view."""
+    import repair_bind
+    screen.reset_stop()
+    bot = RepairBot(live("scrubbing_done"))
+    cannon = live("at_cannon").image
+    frames = iter([cannon] * 99)                     # gone by the first look after the click
+    monkeypatch.setattr(repair_bind, "wait",
+                        lambda s: setattr(bot.win, "image", next(frames)))
+    monkeypatch.setattr(repair_bind, "RECLICK_AFTER", 0.0)
+    bot.tick()
+    assert clicks(bot.win) == [bot.win.to_screen(*BUTTONS[1])]   # the first click only
+    assert bot.failed_starts == {}                               # not a failed start
+    assert not list(snapshot_dir.glob("*button_opened_nothing*"))
+
+
+def test_no_button_click_if_the_window_closed_just_before(monkeypatch):
+    import repair_bind
+    screen.reset_stop()
+    bot = RepairBot(live("scrubbing_done"))
+    monkeypatch.setattr(bot, "repair_window_open", lambda: False)
+    monkeypatch.setattr(repair_bind, "wait", lambda s: None)
+    bot.tick()
+    assert clicks(bot.win) == []
 
 
 # -- opening the next game -----------------------------------------------------

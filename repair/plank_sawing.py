@@ -72,6 +72,8 @@ class PlankSawing(RepairMiniGame):
             wait(NO_PLANK_WAIT)
             return
         self.found("plank")
+        if not self.still_open():
+            return
         log.info("Sawing %s", plank)
         self.saw(PLANKS[plank])
         wait(AFTER_CUT)

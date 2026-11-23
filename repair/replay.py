@@ -13,7 +13,6 @@ import sys
 import numpy as np
 from PIL import Image
 
-from bilge_pumping import BOTTOM_STRIKE, TOP_STRIKE
 from repair_bind import RepairBot
 from repair_mini_game import BUTTONS, TITLE_REGION, button_completed, repair_bar_visible
 from screen import ImageWindow, Rect
@@ -52,8 +51,8 @@ def describe(win):
     elif name == "hull_bracing":
         out["grid"] = ["".join(row) for row in games[name].read_grid()]
     elif name == "bilge_pumping":
-        out["strike_colours"] = {"top": win.pixel(*TOP_STRIKE),
-                                 "bottom": win.pixel(*BOTTOM_STRIKE)}
+        y = games[name].rod_y()
+        out["rod_y"] = None if y is None else round(y)
     return out
 
 
