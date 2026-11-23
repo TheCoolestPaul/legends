@@ -82,8 +82,11 @@ def test_a_piece_the_recipe_needs_is_taken_off_the_board():
 
 
 def test_full_columns_cannot_take_a_pair():
-    board = Board([[("red", 1)] * 9] + [[] for _ in range(7)])
-    assert not board.can_drop(0) and board.can_drop(1)
+    """Odd columns hold 9 pieces, even ones (half a cell higher) only 8."""
+    board = Board([[("red", 1)] * 8, [], [], [("red", 1)] * 8, [("red", 1)] * 8, [], [], []])
+    assert not board.can_drop(0)          # even column 0 is full at 8
+    assert board.can_drop(2)              # odd column 3 still has room at 8
+    assert not board.can_drop(3)          # but even column 4 doesn't
 
 
 def test_best_move_makes_a_recipe_piece_when_it_can():

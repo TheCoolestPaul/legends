@@ -259,9 +259,11 @@ class PotionTable:
         last, since = None, None
         while time.monotonic() < deadline:
             check_stop()
-            hand = self.read_hand()
-            if hand is None and (self.game_over() or self.brewed()):
+            # Live: after "Game Over" the last pair stays drawn in hand, so
+            # check the dialogs every time, not only when the hand is gone.
+            if self.game_over() or self.brewed():
                 return None, None
+            hand = self.read_hand()
             cols = self.read_columns() if hand else None
             now = time.monotonic()
             if hand and cols == last and last is not None:

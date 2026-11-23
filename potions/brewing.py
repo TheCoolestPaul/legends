@@ -13,7 +13,14 @@ The game is lost when the columns fill up.
 from collections import Counter
 
 COLUMNS = 8
-HEIGHT = 9            # pieces per column (measured live, Nov 2026)
+HEIGHT = 9            # most pieces in a column (the odd, lower columns)
+
+
+def capacity(c):
+    """Pieces column ``c`` holds before the game is lost. Live (Nov 2026):
+    odd columns, half a cell lower, held 9; even columns never more than 8,
+    and a 9th piece in even column 6 ended a game ("ran out of space")."""
+    return HEIGHT if c % 2 else HEIGHT - 1
 MAX_TIER = 6
 COLOURS = ("red", "blue", "green", "orange", "gray", "purple")
 
@@ -57,7 +64,7 @@ class Board:
         return [len(col) for col in self.cols]
 
     def can_drop(self, c):
-        return 0 <= c < COLUMNS - 1 and all(len(self.cols[i]) < HEIGHT for i in (c, c + 1))
+        return 0 <= c < COLUMNS - 1 and all(len(self.cols[i]) < capacity(i) for i in (c, c + 1))
 
     def drop(self, pair, c):
         """Drop ``pair`` (left piece, right piece) onto columns c, c+1 and
@@ -153,34 +160,55 @@ def oriented(pair, swapped):
     return (pair[1], pair[0]) if swapped else pair
 
 
-def evaluate(board):
+# Scoring weights (see evaluate); tuned with potions/simulate.py.
+WEIGHTS = {
+    "collected": 1000.0,   # per recipe ingredient delivered
+    "material": 1.0,       # x 3^(tier-1) per piece of a colour the recipe needs
+    # Simulated (potions/simulate.py, 24 games each of Swashbuckler Stew II,
+    # Clap O'Thunder, Deadeye I): 2.0 won 46/48 hard games, 8.0 won 71/72
+    # in fewer turns; unneeded colours are what fills the board.
+    "clutter": 8.0,        # per piece of a colour the recipe doesn't need
+    "pair": 6.0,           # per touching pair of identical pieces (a merge in waiting)
+    "same_colour": 1.5,    # per touching pair of one colour, different tiers
+    "mixed": 1.0,          # per touching pair of different colours
+    "height_sq": 0.6,      # x sum of squared column heights
+    "danger": 40.0,        # per column one short of full
+    "pieces_sq": 0.0,      # x (pieces on the board)^2: space gets dearer as it fills
+}
+
+
+def evaluate(board, w=None):
     """Higher is better. Recipe progress first, then pieces building towards
     what the recipe needs, tidy single-colour clusters and low columns."""
-    score = 1000.0 * board.collected
+    w = w or WEIGHTS
+    score = w["collected"] * board.collected
     wanted = {}
     for (colour, tier), n in board.needs.items():
         if n > 0:
             wanted[colour] = max(wanted.get(colour, 0), tier)
+    pieces = 0
     for c in range(COLUMNS):
         for k, (colour, tier) in enumerate(board.cols[c]):
+            pieces += 1
             target = wanted.get(colour)
             if target and tier < target:
-                score += 3 ** (tier - 1)            # material for the recipe
+                score += w["material"] * 3 ** (tier - 1)
             elif not target:
-                score -= 2                         # clutter
+                score -= w["clutter"]
             for n in neighbours(c, k):
                 other = board.at(*n)
                 if other is None:
                     continue
                 if other == (colour, tier):
-                    score += 6                     # one away from a merge
+                    score += w["pair"]
                 elif other[0] == colour:
-                    score += 1.5                   # same-colour column/cluster
+                    score += w["same_colour"]
                 else:
-                    score -= 1
+                    score -= w["mixed"]
     heights = board.heights()
-    score -= sum(h * h for h in heights) * 0.6
-    score -= 40 * sum(1 for h in heights if h >= HEIGHT - 1)
+    score -= w["height_sq"] * sum(h * h for h in heights)
+    score -= w["danger"] * sum(1 for c, h in enumerate(heights) if h >= capacity(c) - 1)
+    score -= w["pieces_sq"] * pieces * pieces
     return score
 
 
@@ -190,9 +218,10 @@ def _dropped(board, pair, move):
     return b
 
 
-def best_move(board, pair, next_pair=None):
+def best_move(board, pair, next_pair=None, evaluate=None):
     """(column, swapped) for ``pair``, looking one pair ahead when known.
-    None if nothing fits."""
+    None if nothing fits. ``evaluate`` overrides the board scoring."""
+    evaluate = evaluate or globals()["evaluate"]
     best, best_score = None, None
     for move in moves(pair):
         if not board.can_drop(move[0]):
