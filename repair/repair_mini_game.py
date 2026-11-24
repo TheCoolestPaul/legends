@@ -237,6 +237,10 @@ def parse_args(description):
                         help="save about one frame per second of every game "
                              "to debug_frames/ (for building test fixtures)")
     parser.add_argument("--debug", action="store_true", help="verbose logging")
+    parser.add_argument("--max-minutes", type=float, default=0,
+                        help="stop after this many minutes (0: no limit)")
+    parser.add_argument("--max-ships", type=int, default=0,
+                        help="stop after repairing this many ships (0: no limit)")
     args = parser.parse_args()
     snapshots.recording = args.record
     return args
@@ -251,7 +255,8 @@ def run_standalone(game_class):
     """Entry point for running a single minigame from its own file."""
     from screen import live_session
     args = parse_args("Play %s once." % game_class.name)
-    with live_session(hotkeys=session_hotkeys(), debug=args.debug):
+    with live_session(hotkeys=session_hotkeys(), debug=args.debug,
+                      max_minutes=args.max_minutes):
         log.info("F9 saves a debug frame%s.", "; recording frames" if args.record else "")
         try:
             game_class().repair()

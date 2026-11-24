@@ -348,6 +348,28 @@ def test_no_hard_kill_when_the_bot_stops_in_time(clean_stop):
     assert kills == []
 
 
+def test_stop_file_stops_the_bot_like_the_key(clean_stop, tmp_path):
+    """How the overlay stops a bot it started."""
+    stop_file = tmp_path / "stop.flag"
+    kills = []
+    screen.KillSwitch(key_state=lambda: False, grace=5, stop_file=str(stop_file),
+                      kill=lambda: kills.append("killed")).start()
+    time.sleep(0.1)
+    assert not screen._stop.is_set()
+    stop_file.write_text("stop")
+    assert screen._stop.wait(1)
+    screen._finished.set()
+    assert kills == []
+
+
+def test_time_limit_stops_the_bot(clean_stop):
+    screen.KillSwitch(key_state=lambda: False, grace=5,
+                      deadline=time.monotonic() + 0.2).start()
+    assert not screen._stop.wait(0.1)
+    assert screen._stop.wait(1)
+    screen._finished.set()
+
+
 def KillSwitchFor(key_state, kills, grace):
     return screen.KillSwitch(key_state=key_state, grace=grace,
                              kill=lambda: kills.append("killed")).start()

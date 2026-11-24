@@ -15,3 +15,6 @@ debug_frames/
 
 # Simulated plans the potion bot caches per recipe
 potions/plans.json
+
+# Overlay settings (per machine)
+overlay/settings.json

@@ -666,9 +666,10 @@ def single_instance():
     return lock
 
 
-def brew_loop(win, once=False, any_tier=False):
+def brew_loop(win, once=False, any_tier=False, max_brews=0):
     """Brew the open potion, then press "Brew Again" and keep going until
-    stopped, a game is lost, or the table isn't in a playable state."""
+    stopped, a game is lost, ``max_brews`` are made (0: no limit), or the
+    table isn't in a playable state."""
     made = 0
     started = time.monotonic()
     win.refresh()
@@ -687,6 +688,9 @@ def brew_loop(win, once=False, any_tier=False):
         log.info("Brewed %d so far (this one %.0fs, average %.0fs).", made,
                  time.monotonic() - began, (time.monotonic() - started) / made)
         if once:
+            break
+        if max_brews and made >= max_brews:
+            log.info("Brewed %d; stopping (limit).", made)
             break
         if not start_next(win):
             log.warning("The next potion didn't start; stopping.")
@@ -822,6 +826,10 @@ def main():
                         help="also play recipes the plan expects to lose often")
     parser.add_argument("--record", action="store_true", help="save frames to debug_frames/")
     parser.add_argument("--debug", action="store_true", help="verbose logging")
+    parser.add_argument("--max-brews", type=int, default=0,
+                        help="stop after this many potions (0: no limit; not with --recipes)")
+    parser.add_argument("--max-minutes", type=float, default=0,
+                        help="stop after this many minutes (0: no limit)")
     args = parser.parse_args()
     snapshots.recording = args.record
     recipes = [r for r in (args.recipes or "").split(",") if r.strip()]
@@ -831,11 +839,13 @@ def main():
     if lock is None:
         print("Another brew bot is already running; stop it first.")
         sys.exit(1)
-    with live_session(hotkeys=session_hotkeys(), debug=args.debug):
+    with live_session(hotkeys=session_hotkeys(), debug=args.debug,
+                      max_minutes=args.max_minutes):
         if recipes:
             brew_recipes(GameWindow(), recipes, args.count, args.any_tier)
         else:
-            brew_loop(GameWindow(), once=args.once, any_tier=args.any_tier)
+            brew_loop(GameWindow(), once=args.once, any_tier=args.any_tier,
+                      max_brews=args.max_brews)
 
 
 if __name__ == "__main__":

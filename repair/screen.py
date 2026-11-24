@@ -174,11 +174,16 @@ class KillSwitch:
     """
 
     def __init__(self, vk=VK_BACKTICK, grace=KILL_GRACE, poll=KILL_POLL,
-                 key_state=None, kill=None, hotkeys=None):
+                 key_state=None, kill=None, hotkeys=None, stop_file=None, deadline=None):
         """``hotkeys`` maps extra keys to callbacks: {vk or state_fn: callback}.
 
         Each callback runs on this thread when its key goes down.
+        ``stop_file``: stop as if the key was pressed once this file exists
+        (how the overlay stops a bot it started). ``deadline``: a
+        time.monotonic() time at which to stop (the time limit).
         """
+        self.stop_file = stop_file
+        self.deadline = deadline
         self.grace = grace
         self.poll = poll
         self.key_state = key_state or (lambda: key_down(vk))
@@ -201,6 +206,12 @@ class KillSwitch:
             down = self.key_state()
             if down and armed:
                 self.trigger("Stop key pressed")
+                return
+            if self.stop_file and os.path.exists(self.stop_file):
+                self.trigger("Stop requested from the overlay")
+                return
+            if self.deadline is not None and time.monotonic() >= self.deadline:
+                self.trigger("Time limit reached")
                 return
             armed = armed or not down
             for i, (state, callback) in enumerate(self.hotkeys):
@@ -227,13 +238,13 @@ class KillSwitch:
 
 
 @contextlib.contextmanager
-def live_session(hotkeys=None, debug=False):
+def live_session(hotkeys=None, debug=False, max_minutes=None):
     """Run the body as a live bot session with every way of stopping it.
 
-    Backtick (kill switch), Ctrl+C and pyautogui's mouse-in-a-corner
-    fail-safe all end the session cleanly, and the mouse button is always
-    released on the way out. ``hotkeys`` are extra keys for the watcher
-    thread (see KillSwitch).
+    Backtick (kill switch), Ctrl+C, the overlay's stop file (TLOPO_STOP_FILE)
+    and the time limit (``max_minutes``) all end the session cleanly, and
+    the mouse button is always released on the way out. ``hotkeys`` are
+    extra keys for the watcher thread (see KillSwitch).
     """
     import pyautogui
     logging.basicConfig(level=logging.DEBUG if debug else logging.INFO,
@@ -241,8 +252,12 @@ def live_session(hotkeys=None, debug=False):
                         datefmt="%H:%M:%S")
     pyautogui.PAUSE = 0.01
     reset_stop()
-    KillSwitch(hotkeys=hotkeys).start()
+    deadline = time.monotonic() + max_minutes * 60 if max_minutes else None
+    KillSwitch(hotkeys=hotkeys, stop_file=os.environ.get("TLOPO_STOP_FILE") or None,
+               deadline=deadline).start()
     log.info("Press ` to stop (or Ctrl+C).")
+    if max_minutes:
+        log.info("Stopping after %g minutes.", max_minutes)
     try:
         yield
     except StopRequested:

@@ -651,6 +651,37 @@ def test_a_game_just_won_is_not_started_again(bot_on, monkeypatch):
     assert played == ["hull_scrubbing"] * 2
 
 
+def test_ships_are_counted_when_the_buttons_reset(bot_on, monkeypatch):
+    """Live, the last game ending resets every button straight away (the next
+    ship), so a ship is counted when the buttons go from some done to none."""
+    import repair_bind
+    monkeypatch.setattr(repair_bind, "wait", lambda s: None)
+    bot = bot_on("scrubbing_done")                # one button done
+    bot.tick()
+    assert bot.ships == 0 and bot.ship_progress
+    bot.win.image = live("repair_start").image    # all reset: the next ship
+    bot.tick()
+    assert bot.ships == 1 and not bot.ship_progress
+    bot.tick()                                    # the same fresh ship again
+    assert bot.ships == 1
+
+
+def test_the_ship_limit_stops_before_starting_the_next_ship(bot_on, monkeypatch):
+    import repair_bind
+    monkeypatch.setattr(repair_bind, "wait", lambda s: None)
+    bot = bot_on("scrubbing_done")
+    bot.max_ships = 1
+    bot.tick()
+    bot.win.actions.clear()
+    bot.win.image = live("repair_start").image
+    try:
+        bot.tick()
+        assert screen._stop.is_set()
+        assert clicks(bot.win) == []              # no game of the next ship started
+    finally:
+        screen.reset_stop()
+
+
 def test_no_input_until_a_beat_after_the_banner_goes(monkeypatch):
     """Live: games still started early, because input stays ignored for a
     moment after the banner disappears. play() waits BANNER_GRACE first."""

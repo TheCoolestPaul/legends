@@ -23,7 +23,7 @@ from repair_mini_game import (BUTTONS, TITLE_REGION, TITLE_THRESHOLD,
                               button_completed, button_in_progress, parse_args,
                               repair_bar_visible, session_hotkeys)
 from screen import (GameWindow, StopRequested, WindowNotFound, live_session,
-                    timed_out, wait)
+                    request_stop, timed_out, wait)
 
 log = logging.getLogger("repair")
 
@@ -55,8 +55,11 @@ def start_order(button, failed_starts):
 
 
 class RepairBot:
-    def __init__(self, window):
+    def __init__(self, window, max_ships=0):
         self.win = window
+        self.max_ships = max_ships  # stop after this many ships (0: no limit)
+        self.ships = 0              # ships seen repaired this run
+        self.ship_progress = False  # a button on the current ship is done
         self.games = [cls(window) for cls in GAME_CLASSES]
         self.failed_starts = {}
         self.announced_done = False
@@ -112,6 +115,24 @@ class RepairBot:
                 last_click, clicks = time.monotonic(), clicks + 1
         return None
 
+    def count_ship(self, shown, done):
+        """Count a repaired ship: every button done, or (live, usually) the
+        buttons all reset after some were done, as the next ship comes in
+        straight after the last game. Returns True once the ship limit is
+        reached, after asking the bot to stop."""
+        if all(done) or (self.ship_progress and shown is None and not any(done)):
+            self.ships += 1
+            self.ship_progress = False
+            log.info("Ship repaired (%d so far).", self.ships)
+            if self.max_ships and self.ships >= self.max_ships:
+                log.info("Repaired %d ship%s; stopping.", self.ships,
+                         "" if self.ships == 1 else "s")
+                request_stop()
+                return True
+        elif any(done):
+            self.ship_progress = True
+        return False
+
     def just_finished(self, game):
         """Did the bot win ``game`` in the last FINISH_SETTLE seconds?"""
         return (self.finished is not None and self.finished[0] == game.name
@@ -154,6 +175,8 @@ class RepairBot:
             wait(1)
             return
         done = [button_completed(self.win, b) for b in BUTTONS]
+        if self.count_ship(shown, done):
+            return
         if shown is None and not any(done):
             self.skipped.clear()           # a fresh ship: try everything again
         skipped_buttons = {g.button for g in self.games if g.name in self.skipped}
@@ -213,9 +236,13 @@ class RepairBot:
 
 def main():
     args = parse_args("Play every ship-repair minigame until the ship is repaired.")
-    with live_session(hotkeys=session_hotkeys(), debug=args.debug):
+    with live_session(hotkeys=session_hotkeys(), debug=args.debug,
+                      max_minutes=args.max_minutes):
         log.info("F9 saves a debug frame%s.", "; recording frames" if args.record else "")
-        RepairBot(GameWindow()).run()
+        if args.max_ships:
+            log.info("Stopping after %d ship%s.", args.max_ships,
+                     "" if args.max_ships == 1 else "s")
+        RepairBot(GameWindow(), max_ships=args.max_ships).run()
 
 
 if __name__ == "__main__":
