@@ -185,6 +185,16 @@ def test_a_bot_that_ignores_the_stop_is_terminated():
     assert bot.status.startswith("Didn't stop")
 
 
+def test_kill_terminates_a_hung_bot_at_once():
+    bot = runner.BotProcess("repair", popen=fake_popen(FAKE_BOT, "hang"))
+    bot.start(opts())
+    assert poll_until(bot, lambda: bot.count == 2)
+    bot.kill()
+    assert bot.proc.poll() is not None
+    assert poll_until(bot, lambda: bot.state == "stopped")
+    bot.kill()                                       # already gone: no error
+
+
 def test_a_crash_shows_the_exit_code():
     bot = runner.BotProcess("repair", popen=fake_popen(FAKE_BOT, "crash"))
     bot.start(opts())
@@ -223,6 +233,10 @@ class StubBot:
     def poll(self):
         return []
 
+    def kill(self):
+        self.state = "stopped"
+        self.killed = True
+
 
 @pytest.fixture(scope="module")
 def tk_root():
@@ -252,7 +266,8 @@ def panel(tmp_path, tk_root):
     s["position"] = [0, 0]
     app = Overlay(root, s, bots=bots, poller=poller, save=lambda st: saved.append(1))
     yield app, bots, keys, saved
-    root.destroy()
+    if root.winfo_exists():
+        root.destroy()
 
 
 def test_hotkey_starts_and_stops_a_bot(panel):
@@ -301,3 +316,19 @@ def test_settings_changes_are_saved(panel):
     app.vars[("repair", "max_ships")].set("abc")       # not a number: ignored
     assert app.settings["repair"]["max_ships"] == 12
     assert len(saved) == 2
+
+
+def test_quitting_kills_a_bot_that_wont_stop(panel):
+    app, bots, _, _ = panel
+    app.toggle_bot("repair")
+    app.quit()
+    assert bots["repair"].state == "stopping"        # asked first, not killed yet
+    assert not getattr(bots["repair"], "killed", False)
+    app._quit_wait(0)                                 # the wait has run out
+    assert bots["repair"].killed and bots["repair"].state == "stopped"
+    assert not app.root.winfo_exists()
+
+
+def test_quit_waits_longer_than_the_runner_kill_deadline():
+    from overlay import app
+    assert app.QUIT_TRIES * app.QUIT_POLL_MS / 1000 > runner.KILL_AFTER

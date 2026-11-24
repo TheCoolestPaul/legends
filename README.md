@@ -3,6 +3,7 @@ A variety of scripts for automating different tasks in the game "The Legends of 
 
 ## Overview
 There is a ton of stuff inside this repository, most of which was just made on the fly as I was playing the game. Some of the most notable scripts are as follows:
+  - overlay.pyw (a floating panel with hotkeys to start, stop and configure the repair and potion bots)
   - potions/ (automates the potion minigame, which allows for easily leveling new accounts; brew/, brew.py and potions.py are the older versions)
   - twins.py (allows afk farming of enemies for rare items)
   - repair/ (bilge_pumping.py, hull_bracing.py, hull_patching.py, hull_scrubbing.py, hammering.py, and plank_sawing.py) automates the minigames that appear when repairing your ship
@@ -16,6 +17,24 @@ Windows only.
 py -3.13 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt pytest
 ```
+
+## Overlay
+A small always-on-top panel for starting, stopping and configuring the bots without a console. Double-click `overlay.pyw`, or run:
+
+```
+.venv\Scripts\python -m overlay
+```
+
+Default hotkeys (rebind them in the panel's settings):
+
+| Key | Action |
+| --- | --- |
+| F6 | show / hide the panel |
+| F7 | start / stop the repair bot |
+| F8 | start / stop the potion bot |
+| `` ` `` | stop a running bot (the bots' own kill switch) |
+
+F9 is reserved for saving a debug frame. Each bot runs as its own process, using `.venv` if there is one. Only one bot runs at a time, since both drive the same game window, so starting one stops the other first. The panel shows each bot's last log line and its ship or brew count. Settings (input mode, time limit, ship/brew limits, recipes, `--record`/`--debug`) apply on the next start and are saved to `overlay/settings.json` (git-ignored). Closing the panel stops any running bot, and terminates it if it hasn't exited a few seconds later.
 
 ## Repair bots
 Open the repair screen on a ship, then run:

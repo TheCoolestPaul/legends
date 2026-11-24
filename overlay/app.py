@@ -15,11 +15,15 @@ if __package__ in (None, ""):           # run as a file: make "overlay" importab
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from overlay import hotkeys, settings as settings_mod      # noqa: E402
-from overlay.runner import BOTS, BotProcess                # noqa: E402
+from overlay.runner import BOTS, KILL_AFTER, BotProcess    # noqa: E402
 
 log = logging.getLogger("overlay")
 
 TICK_MS = 40
+QUIT_POLL_MS = 100
+# On quit, wait a little past the runner's own terminate deadline before
+# killing whatever is still running.
+QUIT_TRIES = int((KILL_AFTER + 1.0) * 1000 / QUIT_POLL_MS)
 BG, PANEL, FG, DIM = "#16191d", "#20252b", "#e8e8e8", "#8b949e"
 STATE_COLOURS = {"running": "#3fb950", "stopping": "#d29922", "stopped": "#6e7681"}
 FONT = ("Segoe UI", 10)
@@ -372,19 +376,25 @@ class Overlay:
             self._save()
 
     def quit(self):
-        """Stop any running bot, wait for it briefly, then close."""
+        """Stop any running bot, wait for it to exit, then close. A bot still
+        running when the wait runs out is terminated first, so closing the
+        panel never leaves a bot playing with nothing to stop it."""
         for bot in self.bots.values():
             bot.stop()
         self.pending_start = None
-        self._quit_wait(50)
+        self._quit_wait(QUIT_TRIES)
 
     def _quit_wait(self, tries):
         for bot in self.bots.values():
             bot.poll()
-        if tries <= 0 or not any(b.running for b in self.bots.values()):
+        running = [b for b in self.bots.values() if b.running]
+        if tries <= 0 or not running:
+            for bot in running:
+                log.warning("%s bot didn't stop; terminating it", bot.title)
+                bot.kill()
             self.root.destroy()
             return
-        self.root.after(100, lambda: self._quit_wait(tries - 1))
+        self.root.after(QUIT_POLL_MS, lambda: self._quit_wait(tries - 1))
 
 
 def main():

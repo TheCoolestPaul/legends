@@ -7,6 +7,7 @@ kill-switch thread treats like a backtick press; if the bot is still
 running KILL_AFTER seconds later, the process is terminated.
 """
 import collections
+import logging
 import os
 import queue
 import re
@@ -16,6 +17,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+log = logging.getLogger("overlay")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 KILL_AFTER = 5.0            # s after a stop request before terminating
@@ -132,6 +135,18 @@ class BotProcess:
         self.state = "stopping"
         self.status = "Stopping..."
         self._stop_asked_at = self.clock()
+
+    def kill(self, timeout=2.0):
+        """Terminate the process now (no stop request) and wait up to
+        ``timeout`` s for it to exit. Used when the overlay is closing and
+        can't wait for KILL_AFTER, so no bot is left running without it."""
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            log.warning("%s bot (pid %d) didn't exit after terminate", self.title, self.proc.pid)
 
     def poll(self):
         """Take in new output; returns the new lines."""
