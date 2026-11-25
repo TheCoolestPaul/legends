@@ -17,7 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import simulate
-from brewing import STRATEGIES
+from brewing import COLOURS, STRATEGIES
 
 log = logging.getLogger("repair")
 
@@ -54,6 +54,19 @@ def known_pool(needs):
     """The colours this recipe was last dealt, or None."""
     pool = load().get(POOLS, {}).get(slots_key(needs))
     return tuple(sorted(pool)) if pool else None
+
+
+def planning_pool(needs, pool=None):
+    """The colours to plan ``needs`` with: ``pool`` (colours seen dealt for
+    it) or POOL, plus the recipe's own colours, any of the six. A recipe can
+    only be made from colours that are dealt, so those must be in the pool.
+    Live (Nov 2026): 5 x gray 4 was planned with POOL alone, never dealt a
+    gray piece in simulation, and lost every game."""
+    wanted = {colour for (colour, _), n in needs.items() if n > 0}
+    unknown = wanted - set(COLOURS)
+    if unknown:
+        raise ValueError("unknown colour(s) in recipe: %s" % ", ".join(sorted(unknown)))
+    return tuple(sorted(set(pool or POOL) | wanted))
 
 
 def remember_pool(needs, pool):

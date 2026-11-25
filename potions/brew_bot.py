@@ -481,7 +481,7 @@ class Brewer:
             import planner
             from brewing import scorer
             self.recipe = Counter(needs)
-            self.plan_pool = planner.known_pool(needs) or planner.POOL
+            self.plan_pool = planner.planning_pool(needs, planner.known_pool(needs))
             p = planner.plan(needs, self.plan_pool)
             self.strategy = p["strategy"]
             self.evaluate = scorer(self.strategy, needs, self.plan_pool)
@@ -513,6 +513,8 @@ class Brewer:
         import planner
         seen = tuple(sorted(self.dealt))
         planner.remember_pool(self.recipe, seen)
+        # A needed colour not seen yet is still dealt (just unlucky so far).
+        seen = planner.planning_pool(self.recipe, seen)
         if set(seen) == set(self.plan_pool):
             return
         log.info("This island deals %s, not the %s planned for; re-planning in the "

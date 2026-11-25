@@ -232,9 +232,22 @@ class KillSwitch:
         if not _finished.wait(self.grace):
             log.error("Bot did not stop within %.0fs; killing it.", self.grace)
             release_mouse()
+            terminate_children()
             for handler in logging.getLogger().handlers:
                 handler.flush()
             self.kill()
+
+
+def terminate_children():
+    """Terminate this process's multiprocessing children (the potion
+    planner's simulation workers). os._exit() doesn't take them down, and
+    live (Nov 2026) a stop mid-planning left 14 workers busy on every core."""
+    import multiprocessing
+    for child in multiprocessing.active_children():
+        try:
+            child.terminate()
+        except Exception:
+            log.exception("Could not terminate worker %s", child.pid)
 
 
 @contextlib.contextmanager

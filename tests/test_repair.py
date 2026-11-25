@@ -502,3 +502,46 @@ def test_one_line_boards_are_solved_two_lines_demanded_when_unsure():
 
 def test_boards_without_a_full_set_of_pieces_are_refused():
     assert solve(grid_of("RRB OOOOROO BOBO")) is None   # 3 reds, 3 blues
+
+
+HUNG_BOT_WITH_WORKER = r"""
+import multiprocessing, sys, time
+sys.path.insert(0, "repair")
+import logging; logging.basicConfig(level=logging.INFO)
+import screen
+if __name__ == "__main__":
+    worker = multiprocessing.Process(target=time.sleep, args=(30,))
+    worker.start()
+    print(worker.pid, flush=True)
+    start = time.monotonic()
+    screen.KillSwitch(key_state=lambda: time.monotonic() - start > 0.3, grace=0.5).start()
+    while True:      # stuck in the planner: never checks for a stop
+        time.sleep(0.05)
+"""
+
+
+def _alive(pid):
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        k32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return code.value == 259                       # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(handle)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process API")
+def test_killing_a_hung_bot_takes_its_workers_down_too():
+    """Live: a stop mid-planning killed the bot but left 14 workers running."""
+    proc = subprocess.run([sys.executable, "-c", HUNG_BOT_WITH_WORKER], cwd=ROOT,
+                          capture_output=True, text=True, timeout=20)
+    assert proc.returncode == 1 and "killing it" in proc.stderr
+    pid = int(proc.stdout.split()[0])
+    deadline = time.monotonic() + 3
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(pid)

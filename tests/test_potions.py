@@ -1,9 +1,11 @@
 """Potion brewing: the rules simulation and the screen reader."""
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -462,3 +464,57 @@ def test_colours_arent_judged_too_early(monkeypatch, tmp_path):
     brewer, calls = _brewer_learning(monkeypatch, tmp_path, None)
     _deal(brewer, ("red", "green", "blue"), pairs=5)
     assert brewer.replan is None and not brewer.pool_checked
+
+
+# -- planning with the recipe's own colours ------------------------------------------
+def test_a_gray_recipe_is_planned_with_gray():
+    """Live: 5 x gray 4 was planned for red/green/blue/purple, so the
+    simulation never dealt gray and couldn't win."""
+    import planner
+    assert planner.planning_pool(Counter({("gray", 4): 5})) == \
+        ("blue", "gray", "green", "purple", "red")
+
+
+def test_every_colour_can_be_planned_for():
+    import planner
+    from brewing import COLOURS
+    for colour in COLOURS:
+        assert colour in planner.planning_pool(Counter({(colour, 3): 1}))
+    needs = Counter({(colour, 2): 1 for colour in COLOURS})
+    assert planner.planning_pool(needs) == tuple(sorted(COLOURS))
+
+
+def test_known_colours_keep_the_recipes_own():
+    import planner
+    needs = Counter({("orange", 3): 2, ("red", 3): 0})     # red is already made
+    assert planner.planning_pool(needs, ("red", "green", "blue")) == \
+        ("blue", "green", "orange", "red")
+
+
+def test_an_unknown_recipe_colour_is_an_error():
+    import planner
+    with pytest.raises(ValueError):
+        planner.planning_pool(Counter({("teal", 3): 1}))
+
+
+def test_the_brewer_plans_a_gray_recipe_with_gray(monkeypatch, tmp_path):
+    import planner
+    from brew_bot import Brewer
+    monkeypatch.setattr(planner, "PLANS", tmp_path / "plans.json")
+    calls = []
+
+    def fake_plan(needs, pool=None):
+        calls.append(tuple(sorted(pool)))
+        return {"strategy": "standard", "win": 1.0, "median_turns": 80, "results": {}}
+    monkeypatch.setattr(planner, "plan", fake_plan)
+    brewer = Brewer(table("board_start").win)
+    needs = Counter({("gray", 4): 5})
+    assert brewer.choose_plan(needs)
+    assert "gray" in calls[0]
+    # Twelve pairs that happen to hold no gray: gray is still planned for.
+    _deal(brewer, ("red", "green", "blue"))
+    deadline = time.monotonic() + 2
+    while brewer.replan and "result" not in brewer.replan and time.monotonic() < deadline:
+        time.sleep(0.01)
+    brewer.apply_replan()
+    assert brewer.plan_pool == ("blue", "gray", "green", "red")
