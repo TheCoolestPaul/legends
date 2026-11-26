@@ -198,20 +198,28 @@ def oriented(pair, swapped):
     return (pair[1], pair[0]) if swapped else pair
 
 
-# Scoring weights (see evaluate); tuned with potions/simulate.py.
+# Scoring weights (see evaluate). Fitted by potions/tune.py (Nov 2026,
+# 12 generations x 12 candidates on Pantano III, Pincer, Plunder III).
+# On bench.py's 48 fixed deals they won Pantano III 39/48 and Pincer 31/48
+# where the earlier hand-tuned weights (material 1, clutter 8, pair 6,
+# same_colour 1.5, mixed 1, height_sq 0.6, danger 40, base 3, buried and
+# top_needed 0) won 25/48 and 12/48; the easy recipes were unchanged.
 WEIGHTS = {
     "collected": 1000.0,   # per recipe ingredient delivered
-    "material": 1.0,       # x 3^(tier-1) per piece of a colour the recipe needs
-    # Simulated (potions/simulate.py, 24 games each of Swashbuckler Stew II,
-    # Clap O'Thunder, Deadeye I): 2.0 won 46/48 hard games, 8.0 won 71/72
-    # in fewer turns; unneeded colours are what fills the board.
-    "clutter": 8.0,        # per piece of a colour the recipe doesn't need
-    "pair": 6.0,           # per touching pair of identical pieces (a merge in waiting)
-    "same_colour": 1.5,    # per touching pair of one colour, different tiers
-    "mixed": 1.0,          # per touching pair of different colours
-    "height_sq": 0.6,      # x sum of squared column heights
-    "danger": 40.0,        # per column one short of full
+    "material": 1.89,      # x base^(tier-1) per piece of a colour the recipe needs
+    "clutter": 10.6,       # per piece of a colour the recipe doesn't need
+    "pair": 4.65,          # per touching pair of identical pieces (a merge in waiting)
+    "same_colour": 3.58,   # per touching pair of one colour, different tiers
+    "mixed": 1.36,         # per touching pair of different colours
+    "height_sq": 0.43,     # x sum of squared column heights
+    "danger": 24.6,        # per column one short of full
     "pieces_sq": 0.0,      # x (pieces on the board)^2: space gets dearer as it fills
+    # Merge efficiency. A group of n becomes n - 2 pieces, so 4-groups make
+    # a tier for 2 pieces each instead of 3; "material_base" is what a tier
+    # is worth in the tier below.
+    "material_base": 2.56,
+    "buried": 5.24,        # per needed piece under a clutter piece in its column
+    "top_needed": 1.24,    # per column topped by a piece of a needed colour
 }
 
 
@@ -226,17 +234,28 @@ def evaluate(board, w=None):
             wanted[colour] = tier
     material, clutter = w["material"], w["clutter"]
     pair, same_colour, mixed = w["pair"], w["same_colour"], w["mixed"]
+    base = w.get("material_base", 3.0)
+    buried, top_needed = w.get("buried", 0.0), w.get("top_needed", 0.0)
     cols = board.cols
     heights = [len(col) for col in cols]
     pieces = sum(heights)
     for c in range(COLUMNS):
         col, table = cols[c], NEIGHBOURS[c]
+        if (buried or top_needed) and col:
+            if top_needed and col[-1][0] in wanted:
+                score += top_needed
+            if buried:
+                # Needed pieces below the highest clutter piece are stuck
+                # until it merges away.
+                cover = max((k for k, (colour, _) in enumerate(col) if colour not in wanted),
+                            default=-1)
+                score -= buried * sum(1 for colour, _ in col[:cover] if colour in wanted)
         for k, piece in enumerate(col):
             colour, tier = piece
             target = wanted.get(colour)
             if target:
                 if tier < target:
-                    score += material * 3 ** (tier - 1)
+                    score += material * base ** (tier - 1)
             else:
                 score -= clutter
             for c2, k2 in table[k]:

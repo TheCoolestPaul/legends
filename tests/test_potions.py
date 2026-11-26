@@ -540,3 +540,113 @@ def test_the_brewer_plans_a_gray_recipe_with_gray(monkeypatch, tmp_path):
     _deal(brewer, ("red", "green", "blue"))
     assert brewer.replan is None and len(calls) == 1
     assert brewer.plan_pool == ("blue", "gray", "green", "red")
+
+
+# -- a lost drop click ------------------------------------------------------------------
+DROP_NOT_TAKEN = ("r3,r1 | b4,r2,r1 | b4,b1,g1,g1,r1 | g5,g2,g2,k1,k1,b1,b1 | k1,k1 | "
+                  "b2,b2,r2,k1 | k1,r2,b2 | k1")
+
+
+def test_gray_and_green_are_told_apart_in_logs():
+    from brew_bot import describe
+    t = table("drop_not_taken")
+    assert describe(t.read_columns()) == DROP_NOT_TAKEN
+
+
+def test_a_lost_drop_click_is_noticed():
+    """Live (Nov 2026): the click was lost and the pair stayed in hand over
+    columns 2-3, so the bot logged a prediction mismatch."""
+    t = table("drop_not_taken")
+    before = t.read_columns()
+    pair = (("blue", 1), ("green", 1))
+    assert not t.drop_taken(pair, 2, before, timeout=0)
+    assert t.drop_taken(pair, 3, before, timeout=0)               # held elsewhere
+    assert t.drop_taken(pair[::-1], 2, before, timeout=0)         # a different hand
+    moved = [list(col) for col in before]
+    moved[2].append(("blue", 1))
+    assert t.drop_taken(pair, 2, moved, timeout=0)                # board changed
+
+
+
+# -- benchmark and tuning ----------------------------------------------------------------
+def test_tuned_weights_use_the_merge_features():
+    from brewing import WEIGHTS
+    assert WEIGHTS["buried"] > 0 and WEIGHTS["top_needed"] > 0
+    assert WEIGHTS["material_base"] < 3.0
+
+
+def test_buried_and_top_needed_features():
+    from brewing import WEIGHTS, evaluate
+    needs = Counter({("gray", 3): 1})
+    # Column 0: gray under red (buried); column 1: red under gray (on top).
+    b = parse("r1 k1 .. .. .. .. .. ..\nk1 r1 .. .. .. .. .. ..", needs)
+    off = dict(WEIGHTS, buried=0.0, top_needed=0.0)
+    base = evaluate(b, off)
+    assert evaluate(b, dict(off, buried=5.0)) == pytest.approx(base - 5.0)
+    assert evaluate(b, dict(off, top_needed=5.0)) == pytest.approx(base + 5.0)
+
+
+def test_cheaper_merges_value_high_tiers_less():
+    from brewing import WEIGHTS, evaluate
+    b = parse("k2 .. .. .. .. .. .. ..", Counter({("gray", 4): 1}))
+    assert evaluate(b, dict(WEIGHTS, material_base=2.0)) < evaluate(b)
+
+
+def test_bench_plays_fixed_deals():
+    import bench
+    w = bench.weights_from()
+    jobs = bench.jobs_for(w, ["swiftfoot"], 2)
+    assert jobs == bench.jobs_for(w, ["swiftfoot"], 2)               # same deals every run
+    results = [bench.play_one(j) for j in jobs]
+    assert all(r[0] == "swiftfoot" and 0 <= r[4] <= 1 for r in results)
+    assert results == [bench.play_one(j) for j in jobs]               # deterministic
+    s = bench.summarise(results)["swiftfoot"]
+    assert s["games"] == 2 and s["low"] <= s["won"] / 2 <= s["high"]
+
+
+def test_wilson_interval():
+    import bench
+    low, high = bench.wilson(24, 48)
+    assert 0.35 < low < 0.5 < high < 0.65
+    assert bench.wilson(0, 10)[0] == 0.0 and bench.wilson(10, 10)[1] == 1.0
+
+
+def test_tuning_moves_towards_the_best_candidates():
+    import tune
+    state = tune.initial_state()
+    before = tune.mean_weights(state)["clutter"]
+    candidates = [dict(tune.mean_weights(state), clutter=c) for c in (1.0, 2.0, 40.0, 50.0)]
+    scored = [(0.1, {}), (0.2, {}), (0.9, {}), (0.8, {})]
+    order = tune.step(state, candidates, scored)
+    assert order[0] == 2
+    assert tune.mean_weights(state)["clutter"] > before
+
+
+def test_a_win_always_beats_a_loss():
+    import tune
+    assert tune.game_score(True, 400, 1.0) > tune.game_score(False, 10, 0.99)
+    assert tune.game_score(True, 50, 1.0) > tune.game_score(True, 100, 1.0)
+
+
+def test_a_tiny_tuning_run(monkeypatch, tmp_path):
+    import json
+    import tune
+    monkeypatch.setattr(tune, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(tune, "BEST", tmp_path / "best.json")
+    tune.main(["--generations", "1", "--population", "2", "--games", "1",
+               "--recipes", "swiftfoot", "--workers", "2"])
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["generation"] == 1 and len(state["history"]) == 1
+    assert set(json.loads((tmp_path / "best.json").read_text())["weights"]) == \
+        {name for name, *_ in tune.PARAMS}
+
+
+def test_progress_credits_tiers_reached_towards_open_slots():
+    import simulate
+    b = parse("b5 .. .. .. .. .. .. ..", Counter({("blue", 6): 1}))
+    assert abs(simulate.progress(b, 1) - 0.5 * 5 / 6) < 1e-9
+    b = parse("r1 .. .. .. .. .. .. ..", Counter({("blue", 6): 1}))
+    assert simulate.progress(b, 1) == 0.0
+    b.needs[("blue", 6)] = 0
+    b.collected = 1
+    assert simulate.progress(b, 1) == 1.0

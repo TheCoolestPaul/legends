@@ -28,7 +28,7 @@ sys.path.insert(0, str(HERE.parent / "repair"))  # shared screen code
 sys.path.insert(0, str(HERE))
 
 import snapshots  # noqa: E402
-from brewing import COLUMNS, Board, best_move, oriented  # noqa: E402
+from brewing import CODES, COLUMNS, Board, best_move, oriented  # noqa: E402
 from repair_mini_game import session_hotkeys  # noqa: E402
 from screen import (REPO_ROOT, GameWindow, check_stop, live_session,  # noqa: E402
                     match_marker, wait)
@@ -88,6 +88,11 @@ MIN_BORDER_PIXELS = 300                  # fewer coloured pixels: a gray border
 RECIPE_MIN_SCORE = 0.5                   # tier match within a known border colour
 MATCH_WAIT = 1.5                         # s for the board to reach the prediction
 DROP_HOLD = 0.05                         # s the button is held to drop a pair
+# Live (Nov 2026): a background drop click was lost now and then; the pair
+# stayed in hand over the board for seconds. If it's still there (and the
+# board unchanged) this long after the click, press again.
+DROP_CONFIRM = 1.0
+DROP_RETRIES = 2
 PIECE_SCALE = 0.84                       # board pieces vs the ingredient chart
 INNER = (0.2, 0.8)                       # part of a chart hex compared (no corners)
 SEARCH = 8                               # ref px of slack around a cell centre
@@ -393,6 +398,20 @@ class PotionTable:
         finally:
             self.win.mouse_up(x, y)
 
+    def drop_taken(self, pair, c, before, timeout=DROP_CONFIRM):
+        """After a drop: did the game take it? False if ``pair`` stayed in
+        hand over c with the board still ``before`` for ``timeout`` s (the
+        click was lost). Returns as soon as either changes."""
+        deadline = time.monotonic() + timeout
+        while True:
+            check_stop()
+            self.look()
+            if not (self.hand_is(pair, c) and self.board_is(before)):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            wait(0.03)
+
     def wait_for(self, expected_cols, expected_pair, c, done=False):
         """After a drop: wait until ``expected_pair`` is in hand over c and
         the board matches ``expected_cols``, then return (cols, hand) at
@@ -450,9 +469,14 @@ class PotionTable:
         return None, None
 
 
+LETTERS = {colour: code for code, colour in CODES.items()}   # gray is k: green is g
+
+
 def describe(cols):
-    """Short text of a board: each column bottom first, e.g. 'g1,b2 | - | ...'."""
-    return " | ".join(",".join("%s%d" % (c[0], t) for c, t in col) or "-" for col in cols)
+    """Short text of a board: each column bottom first, e.g. 'g1,b2 | - | ...'
+    (letters as in brewing.CODES)."""
+    return " | ".join(",".join("%s%d" % (LETTERS.get(c, c[0]), t) for c, t in col) or "-"
+                      for col in cols)
 
 
 class Brewer:
@@ -610,6 +634,11 @@ class Brewer:
             t3 = time.monotonic()
             log.debug("drop %s on columns %d-%d", want, c, c + 1)
             t.drop(c)
+            for _ in range(DROP_RETRIES):
+                if t.drop_taken(want, c, board.cols):
+                    break
+                log.warning("The drop on columns %d-%d didn't take; pressing again", c, c + 1)
+                t.drop(c)
             t4 = time.monotonic()
             turns += 1
             self.turns = turns

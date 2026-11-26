@@ -18,3 +18,7 @@ potions/plans.json
 
 # Overlay settings (per machine)
 overlay/settings.json
+
+# Weight tuning runs (potions/tune.py)
+potions/tune_state.json
+potions/tune_best.json
