@@ -471,24 +471,48 @@ def test_a_gray_recipe_is_planned_with_gray():
     """Live: 5 x gray 4 was planned for red/green/blue/purple, so the
     simulation never dealt gray and couldn't win."""
     import planner
-    assert planner.planning_pool(Counter({("gray", 4): 5})) == \
-        ("blue", "gray", "green", "purple", "red")
+    assert planner.planning_pool(Counter({("gray", 4): 5})) == ("blue", "gray", "green", "red")
 
 
-def test_every_colour_can_be_planned_for():
+def test_red_green_and_blue_plus_one_extra_colour():
+    """Islands deal red, green and blue, plus at most one of orange, gray
+    and purple."""
     import planner
-    from brewing import COLOURS
-    for colour in COLOURS:
-        assert colour in planner.planning_pool(Counter({(colour, 3): 1}))
-    needs = Counter({(colour, 2): 1 for colour in COLOURS})
-    assert planner.planning_pool(needs) == tuple(sorted(COLOURS))
+    for extra in ("orange", "gray", "purple"):
+        pool = planner.planning_pool(Counter({(extra, 3): 1, ("red", 3): 1}))
+        assert pool == tuple(sorted(("red", "green", "blue", extra)))
+    for base in ("red", "green", "blue"):
+        # No extra needed and none seen yet: plan for a 4th, the harder case.
+        assert len(planner.planning_pool(Counter({(base, 3): 1}))) == 4
 
 
-def test_known_colours_keep_the_recipes_own():
+def test_a_recipe_needing_two_extra_colours_is_an_error():
+    import planner
+    for pair in (("gray", "purple"), ("gray", "orange"), ("orange", "purple")):
+        with pytest.raises(ValueError):
+            planner.planning_pool(Counter({(pair[0], 3): 1, (pair[1], 3): 1}))
+
+
+def test_colours_seen_dealt_are_used_when_the_recipe_needs_no_extra():
+    import planner
+    needs = Counter({("blue", 4): 5})
+    assert planner.planning_pool(needs, ("blue", "green", "red")) == ("blue", "green", "red")
+    assert planner.planning_pool(needs, ("blue", "green", "orange", "red")) ==         ("blue", "green", "orange", "red")
+    # A red/green/blue colour not seen yet is still dealt.
+    assert planner.planning_pool(needs, ("blue", "green")) == ("blue", "green", "red")
+
+
+def test_the_recipes_extra_colour_wins_over_one_seen():
     import planner
     needs = Counter({("orange", 3): 2, ("red", 3): 0})     # red is already made
-    assert planner.planning_pool(needs, ("red", "green", "blue")) == \
-        ("blue", "green", "orange", "red")
+    assert planner.planning_pool(needs, ("red", "green", "blue")) ==         ("blue", "green", "orange", "red")
+    assert planner.planning_pool(needs, ("blue", "green", "purple", "red")) ==         ("blue", "green", "orange", "red")
+
+
+def test_two_extra_colours_seen_are_a_misread():
+    import planner
+    needs = Counter({("blue", 4): 5})
+    assert planner.planning_pool(needs, ("blue", "gray", "green", "purple", "red")) ==         tuple(sorted(planner.POOL))
 
 
 def test_an_unknown_recipe_colour_is_an_error():
@@ -510,11 +534,9 @@ def test_the_brewer_plans_a_gray_recipe_with_gray(monkeypatch, tmp_path):
     brewer = Brewer(table("board_start").win)
     needs = Counter({("gray", 4): 5})
     assert brewer.choose_plan(needs)
-    assert "gray" in calls[0]
-    # Twelve pairs that happen to hold no gray: gray is still planned for.
+    assert calls == [("blue", "gray", "green", "red")]   # gray is the island's 4th
+    # Twelve pairs that happen to hold no gray: gray is still planned for,
+    # so there's nothing to re-plan.
     _deal(brewer, ("red", "green", "blue"))
-    deadline = time.monotonic() + 2
-    while brewer.replan and "result" not in brewer.replan and time.monotonic() < deadline:
-        time.sleep(0.01)
-    brewer.apply_replan()
+    assert brewer.replan is None and len(calls) == 1
     assert brewer.plan_pool == ("blue", "gray", "green", "red")

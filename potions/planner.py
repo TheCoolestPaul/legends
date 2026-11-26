@@ -29,11 +29,15 @@ EASY = 15               # first-look wins (of GAMES) that settle it at once
 # ahead 10-8, while 32 fresh games had lanes ahead 24-13; at ~60% wins, 16
 # games swing by 2-3 either way.
 MIN_WIN = 0.7           # below this the bot skips the recipe (unless --any-tier)
-# Colours dealt aren't known before play starts: they vary by island (red,
-# green and blue everywhere so far; some add purple or gray). Until a
-# recipe's colours have been seen, plan for four, the harder case, so a
-# recipe that passes is at least as likely to be won live. The bot then
-# re-plans for the colours actually dealt (and remembers them).
+# Colours dealt: always red, green and blue, plus at most one of orange,
+# gray or purple depending on the island (never two of those). A recipe
+# needing one of the three tells which is dealt. Otherwise, until a
+# recipe's colours have been seen, plan for a 4th colour, the harder case,
+# so a recipe that passes is at least as likely to be won live; which one
+# doesn't matter, since it's only clutter. The bot then re-plans for the
+# colours actually dealt (and remembers them).
+BASE = frozenset(simulate.RGB)
+EXTRAS = frozenset({"orange", "gray", "purple"})
 POOL = simulate.RGBP
 SEED = 2026
 POOLS = "_pools"        # plans.json: {recipe slots: colours last dealt}
@@ -57,16 +61,31 @@ def known_pool(needs):
 
 
 def planning_pool(needs, pool=None):
-    """The colours to plan ``needs`` with: ``pool`` (colours seen dealt for
-    it) or POOL, plus the recipe's own colours, any of the six. A recipe can
-    only be made from colours that are dealt, so those must be in the pool.
-    Live (Nov 2026): 5 x gray 4 was planned with POOL alone, never dealt a
-    gray piece in simulation, and lost every game."""
+    """The colours to plan ``needs`` with: red, green and blue, plus the
+    one extra colour (orange, gray or purple) the recipe needs, else the
+    extra seen dealt in ``pool``, else POOL's (the harder case).
+
+    A recipe can only be made from colours that are dealt. Live (Nov 2026):
+    5 x gray 4 was planned with POOL alone, never dealt a gray piece in
+    simulation, and lost every game."""
     wanted = {colour for (colour, _), n in needs.items() if n > 0}
     unknown = wanted - set(COLOURS)
     if unknown:
         raise ValueError("unknown colour(s) in recipe: %s" % ", ".join(sorted(unknown)))
-    return tuple(sorted(set(pool or POOL) | wanted))
+    extras = wanted & EXTRAS
+    if len(extras) > 1:
+        raise ValueError("recipe needs %s, but an island deals only one of orange, gray "
+                         "and purple" % " and ".join(sorted(extras)))
+    if not extras and pool is not None:
+        extras = set(pool) & EXTRAS
+        if len(extras) > 1:                 # a misread when learning: don't trust it
+            log.warning("Colours seen dealt (%s) can't all be right; planning for a "
+                        "4th colour", "/".join(sorted(pool)))
+            extras = set()
+            pool = None
+    if not extras and pool is None:
+        extras = set(POOL) & EXTRAS
+    return tuple(sorted(BASE | extras))
 
 
 def remember_pool(needs, pool):
