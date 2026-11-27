@@ -139,6 +139,83 @@ def key_down(vk):
 _background_windows = []      # GameWindows sending input as window messages
 
 
+# -- the player's own clicks ---------------------------------------------------
+VK_RBUTTON = 0x02
+GA_ROOT = 2
+
+
+class InputLog:
+    """When the player pressed the real mouse buttons, to tell whether a
+    click the game lost collided with one of theirs (live, Nov 2026: clicking
+    while the bot played sometimes cost it a click).
+
+    Background input is posted to the game window and never shows in
+    GetAsyncKeyState, so every button change seen here is the player's. Only
+    the left/right button state and whether the cursor was over the game are
+    kept, for the last KEEP seconds; nothing leaves the process.
+    """
+    POLL = 0.004     # s between checks (button presses last 50+ ms)
+    KEEP = 120.0     # s of history kept
+
+    def __init__(self):
+        self.hwnd = None
+        self._events = []            # (time, button, down, over the game)
+        self._lock = threading.Lock()
+        self._thread = None
+
+    def start(self, hwnd):
+        """Watch the buttons from now on (idempotent; ``hwnd`` is the game)."""
+        self.hwnd = hwnd
+        if self._thread is None and sys.platform == "win32":
+            self._thread = threading.Thread(target=self._watch, name="input-log", daemon=True)
+            self._thread.start()
+
+    def _watch(self):
+        held = {VK_LBUTTON: False, VK_RBUTTON: False}
+        while True:
+            try:
+                for vk in held:
+                    down = key_down(vk)
+                    if down != held[vk]:
+                        held[vk] = down
+                        self.add(time.monotonic(), "L" if vk == VK_LBUTTON else "R", down,
+                                 self._over_game())
+            except Exception:
+                log.debug("input log check failed", exc_info=True)
+            time.sleep(self.POLL)
+
+    def _over_game(self):
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.WindowFromPoint.argtypes = [wintypes.POINT]
+        user32.WindowFromPoint.restype = wintypes.HWND
+        user32.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+        user32.GetAncestor.restype = wintypes.HWND
+        pt = wintypes.POINT()
+        if not user32.GetCursorPos(ctypes.byref(pt)):
+            return None
+        root = user32.GetAncestor(user32.WindowFromPoint(pt), GA_ROOT)
+        return bool(self.hwnd) and root == self.hwnd
+
+    def add(self, t, button, down, over_game):
+        with self._lock:
+            self._events.append((t, button, down, over_game))
+            cut = 0
+            while cut < len(self._events) and self._events[cut][0] < t - self.KEEP:
+                cut += 1
+            del self._events[:cut]
+
+    def near(self, t0, before=0.3, after=0.3):
+        """The player's button changes from ``before`` s before ``t0`` to
+        ``after`` s after it: [[button, "down"/"up", ms from t0, over game]]."""
+        with self._lock:
+            return [[b, "down" if d else "up", round(1000 * (t - t0)), over]
+                    for t, b, d, over in self._events if t0 - before <= t <= t0 + after]
+
+
+INPUT_LOG = InputLog()
+
+
 def release_mouse():
     """Release the left mouse button if it is held, so a drag never sticks.
 
@@ -558,6 +635,7 @@ class GameWindow:
         """Post a mouse message for screen ``point`` to the game window."""
         if self not in _background_windows:
             _background_windows.append(self)
+            INPUT_LOG.start(self.hwnd)
         cx, cy = point[0] - self.rect.left, point[1] - self.rect.top
         self._cursor = (cx, cy)
         ctypes.windll.user32.PostMessageW(self.hwnd, msg, self._held | wparam,

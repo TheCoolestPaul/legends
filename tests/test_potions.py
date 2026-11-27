@@ -744,3 +744,47 @@ def test_a_stopped_game_is_still_logged(monkeypatch):
         brewer.play()
     (g,) = gamelog.load(gamelog.LOG_DIR)
     assert g["result"] == "stopped" and g["turns_played"] == 4
+
+
+# -- the player's clicks vs the bot's -----------------------------------------------------
+def test_the_input_log_finds_the_players_presses_near_a_click():
+    from screen import InputLog
+    log_ = InputLog()
+    log_.add(10.00, "L", True, False)
+    log_.add(10.08, "L", False, False)
+    log_.add(11.00, "R", True, True)
+    assert log_.near(10.1) == [["L", "down", -100, False], ["L", "up", -20, False]]
+    assert log_.near(10.9, before=0.05) == [["R", "down", 100, True]]
+    log_.add(10.0 + InputLog.KEEP + 1, "L", True, False)    # old history is dropped
+    assert [e[1] for e in log_._events] == ["R", "L"]
+
+
+def test_lost_clicks_are_logged_with_the_players_presses(monkeypatch, caplog):
+    import brew_bot
+    import gamelog
+    from brew_bot import Brewer
+    brewer = Brewer(table("board_start").win)
+    brewer.game = gamelog.GameLog(Counter({("blue", 4): 1}))
+    brewer.turns = 6
+    monkeypatch.setattr(brew_bot.INPUT_LOG, "near",
+                        lambda t0: [["L", "down", -40, False]] if t0 == 2.0 else [])
+    brewer.note_click("drop", 1.0, True)
+    with caplog.at_level("WARNING", logger="repair"):
+        brewer.note_click("drop", 2.0, False)
+    assert brewer.game.game["clicks"] == [
+        {"turn": 7, "kind": "drop", "ok": True, "user": []},
+        {"turn": 7, "kind": "drop", "ok": False, "user": [["L", "down", -40, False]]}]
+    assert "L down at -40 ms" in caplog.text
+
+
+def test_livecheck_splits_lost_clicks_by_the_players_activity():
+    import livecheck
+    game = {"clicks": [
+        {"turn": 1, "kind": "drop", "ok": False, "user": [["L", "down", -40, False]]},
+        {"turn": 1, "kind": "drop", "ok": True, "user": []},
+        {"turn": 2, "kind": "aim", "ok": True, "user": [["R", "up", 900, False]]},
+        {"turn": 2, "kind": "drop", "ok": True, "user": [["L", "up", 120, True]]}]}
+    c = livecheck.clicks([game])
+    assert c["drop"] == {"busy": [1, 2], "quiet": [0, 1]}
+    assert c["aim"] == {"busy": [0, 0], "quiet": [0, 1]}      # 900 ms away: quiet
+    assert c["all"] == {"busy": [1, 2], "quiet": [0, 2]}

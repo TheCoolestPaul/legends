@@ -42,6 +42,12 @@ class GameLog:
             "pair": _pieces(pair), "next": _pieces(nxt) if nxt else None,
             "column": column, "swapped": bool(swapped)})
 
+    def click(self, turn, kind, ok, user):
+        """One aim/rotate/drop on ``turn``: did the game take it, and the
+        player's own button presses around it ([button, down/up, ms, over game])."""
+        self.game.setdefault("clicks", []).append(
+            {"turn": turn, "kind": kind, "ok": bool(ok), "user": user})
+
     def mismatch(self, seen):
         """The board after the last move wasn't the one predicted."""
         if self.game["turns"]:

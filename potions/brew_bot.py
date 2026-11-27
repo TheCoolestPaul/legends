@@ -31,8 +31,8 @@ import gamelog  # noqa: E402
 import snapshots  # noqa: E402
 from brewing import CODES, COLUMNS, Board, best_move, oriented  # noqa: E402
 from repair_mini_game import session_hotkeys  # noqa: E402
-from screen import (REPO_ROOT, GameWindow, check_stop, live_session,  # noqa: E402
-                    match_marker, wait)
+from screen import (INPUT_LOG, REPO_ROOT, GameWindow, check_stop,  # noqa: E402
+                    live_session, match_marker, wait)
 
 log = logging.getLogger("repair")
 
@@ -573,6 +573,18 @@ class Brewer:
         log.info("Plan for %s: %s strategy, simulated %.0f%% wins, median %s turns.",
                  "/".join(self.plan_pool), self.strategy, 100 * p["win"], p["median_turns"])
 
+    def note_click(self, kind, started, ok):
+        """Log one aim/rotate/drop and whether the game took it, with any
+        press of the player's own mouse buttons around it (screen.InputLog):
+        does clicking while the bot plays cost it clicks?"""
+        user = INPUT_LOG.near(started)
+        if self.game is not None:
+            self.game.click(self.turns + 1, kind, ok, user)
+        if not ok and user:
+            log.warning("The %s was lost with the player's mouse busy around it: %s", kind,
+                        ", ".join("%s %s at %+d ms%s" % (b, what, ms, " over the game" if over
+                                                         else "") for b, what, ms, over in user))
+
     def play(self):
         """Play until the potion is done or there's no pair to place."""
         t = self.table
@@ -632,6 +644,7 @@ class Brewer:
             predicted.pieces_merged = predicted.drop(want, c)
             held = t.hold_over(c, pair)
             t2 = time.monotonic()
+            self.note_click("aim", t1, held is not None)
             if held is None:
                 lost += 1
                 log.warning("The pair didn't follow the cursor to column %d (%d/%d)",
@@ -644,19 +657,26 @@ class Brewer:
                 continue
             lost = 0
             if (held[0], held[1]) != want:
+                tr = time.monotonic()
                 held = t.rotate(held)
-                if held is None or (held[0], held[1]) != want:
+                rotated = held is not None and (held[0], held[1]) == want
+                self.note_click("rotate", tr, rotated)
+                if not rotated:
                     log.warning("Rotate didn't take; re-reading")
                     cols, hand = t.wait_settled()
                     continue
             t3 = time.monotonic()
             log.debug("drop %s on columns %d-%d", want, c, c + 1)
-            t.drop(c)
-            for _ in range(DROP_RETRIES):
-                if t.drop_taken(want, c, board.cols):
-                    break
-                log.warning("The drop on columns %d-%d didn't take; pressing again", c, c + 1)
+            for attempt in range(DROP_RETRIES + 1):
+                if attempt:
+                    log.warning("The drop on columns %d-%d didn't take; pressing again",
+                                c, c + 1)
+                td = time.monotonic()
                 t.drop(c)
+                taken = t.drop_taken(want, c, board.cols)
+                self.note_click("drop", td, taken)
+                if taken:
+                    break
             t4 = time.monotonic()
             turns += 1
             self.turns = turns

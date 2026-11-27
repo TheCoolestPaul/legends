@@ -124,6 +124,21 @@ def replay(games):
     return agree, checked, examples
 
 
+def clicks(games, window=300):
+    """Per kind (aim/rotate/drop) and "all": {"busy": [lost, clicks],
+    "quiet": [lost, clicks]}, busy meaning the player pressed or released
+    a mouse button within ``window`` ms of the bot's click."""
+    out = defaultdict(lambda: {"busy": [0, 0], "quiet": [0, 0]})
+    for g in games:
+        for c in g.get("clicks", []):
+            busy = any(abs(ms) <= window for _, _, ms, _ in c["user"])
+            for key in (c["kind"], "all"):
+                cell = out[key]["busy" if busy else "quiet"]
+                cell[0] += not c["ok"]
+                cell[1] += 1
+    return dict(out)
+
+
 def sim_one(job):
     needs, pool, strategy, seed = job
     won, turns = simulate.play(Counter({(c, k): n for c, k, n in needs}), pool,
@@ -187,6 +202,15 @@ def report(games, sim_games=48, n_workers=None):
                  % (agree, checked, pct(agree, checked)))
     for started, turn, pair, col in examples:
         lines.append("  e.g. %s turn %d: %s on %d-%d" % (started, turn, pair, col, col + 1))
+    counts = clicks(games)
+    if counts:
+        lines.append("\nClicks lost, with the player's mouse busy within 300 ms vs quiet:")
+        for kind in ("aim", "rotate", "drop", "all"):
+            if kind in counts:
+                busy, quiet = counts[kind]["busy"], counts[kind]["quiet"]
+                lines.append("  %-6s busy %d/%d %s   quiet %d/%d %s"
+                             % (kind, busy[0], busy[1], pct(*busy), quiet[0], quiet[1],
+                                pct(*quiet)))
     lines.append("\nResults (live vs simulated; stopped games left out):")
     for r in results(games, sim_games, n_workers):
         low, high = wilson(r["won"], r["games"])
