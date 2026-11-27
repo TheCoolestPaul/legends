@@ -67,8 +67,15 @@ BUTTON_MATCH = 0.8
 
 # -- play ----------------------------------------------------------------------------
 SIMULATIONS = 800
-RAISE_SHARE = 1.6       # bet/raise when the chance of winning is this many fair shares
-RAISE_MIN = 0.55        # ... and at least this
+# Bet or raise once the chance of winning is this far from a fair share
+# (1 in the number of players) towards certainty: fair + EDGE * (1 - fair).
+# Heads-up after the flop: bet at 61%, raise a bet at 68%; against three:
+# 44% / 51%; before the flop against three, 40% (A-K, A-Q suited, J-J up).
+# Live (Nov 27, ~100 hands at 80/160): with a flat 80% heads-up bar it
+# checked three fives and trip sixes, and only called pre-flop with A-K.
+BET_EDGE = 0.22         # nobody has bet yet (Check is up): bet
+RAISE_EDGE = 0.35       # facing a bet: raise
+PREFLOP_EDGE = 0.2      # before the flop, either
 CALL_SHARE = 1.0        # call when it's at least a fair share
 TURN_EVERY = 0.25       # s between looks while waiting for our turn
 ACT_WAIT = 4.0          # s for the buttons to go away after a click
@@ -160,13 +167,17 @@ def win_chance(hole, board, opponents, simulations=SIMULATIONS, rng=random):
     return total / simulations
 
 
-def decide(chance, opponents, can_check, can_raise):
+def raise_bar(opponents, can_check, preflop):
+    """The chance of winning at which to bet or raise."""
+    fair = 1.0 / (max(1, opponents) + 1)
+    edge = PREFLOP_EDGE if preflop else BET_EDGE if can_check else RAISE_EDGE
+    return fair + edge * (1 - fair)
+
+
+def decide(chance, opponents, can_check, can_raise, preflop=False):
     """'raise' (bet or raise), 'call' (check or call), 'check' or 'fold'."""
     fair = 1.0 / (max(1, opponents) + 1)
-    # Both: the chance is against random hands, and players still in on
-    # later streets hold better than random (live: middle pair raised
-    # heads-up at 61-63% into two pair).
-    if can_raise and chance >= max(RAISE_SHARE * fair, RAISE_MIN):
+    if can_raise and chance >= raise_bar(opponents, can_check, preflop):
         return "raise"
     if chance >= CALL_SHARE * fair:
         return "call"
@@ -316,7 +327,8 @@ class Player:
             snapshots.save(self.win, "unknown_card", "poker", force=True)
         else:
             chance = win_chance(hole, board, opponents)
-            action = decide(chance, opponents, buttons["check"], buttons["raise"])
+            action = decide(chance, opponents, buttons["check"], buttons["raise"],
+                            preflop=not board)
         # Our turn again on the same street means someone raised us back.
         # That player is usually strong, which the chance against random
         # hands can't see (live: three nines re-raised the river into a

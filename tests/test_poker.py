@@ -101,18 +101,21 @@ def test_win_chance():
         pytest.approx(0.5)
 
 
-@pytest.mark.parametrize("chance, opponents, can_check, can_raise, action", [
-    (0.9, 1, False, True, "raise"),
-    (0.9, 1, False, False, "call"),     # raises capped: call
-    (0.55, 3, True, True, "raise"),     # strong for four players
-    (0.63, 1, False, True, "call"),     # heads-up a raise needs 80% (live: middle pair)
-    (0.85, 1, True, True, "raise"),
-    (0.30, 3, False, True, "call"),     # better than a fair share (25%)
-    (0.15, 3, False, True, "fold"),
-    (0.15, 3, True, True, "check"),     # never fold when checking is free
+@pytest.mark.parametrize("chance, opponents, can_check, can_raise, preflop, action", [
+    (0.9, 1, False, True, False, "raise"),
+    (0.9, 1, False, False, False, "call"),    # raises capped: call
+    (0.77, 1, True, True, False, "raise"),    # live: three fives heads-up only checked
+    (0.51, 3, True, True, False, "raise"),    # live: trip sixes against three checked
+    (0.63, 1, False, True, False, "call"),    # raising a bet heads-up needs 68%
+    (0.70, 1, False, True, False, "raise"),
+    (0.41, 3, False, True, True, "raise"),    # A-K before the flop
+    (0.38, 3, False, True, True, "call"),     # A-Q offsuit: call
+    (0.30, 3, False, True, False, "call"),    # better than a fair share (25%)
+    (0.15, 3, False, True, False, "fold"),
+    (0.15, 3, True, True, False, "check"),    # never fold when checking is free
 ])
-def test_decide(chance, opponents, can_check, can_raise, action):
-    assert decide(chance, opponents, can_check, can_raise) == action
+def test_decide(chance, opponents, can_check, can_raise, preflop, action):
+    assert decide(chance, opponents, can_check, can_raise, preflop) == action
 
 
 def test_plays_a_turn(tmp_path, monkeypatch):
