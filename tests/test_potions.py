@@ -17,6 +17,13 @@ from screen import ImageWindow, Rect  # noqa: E402
 FIXTURES = ROOT / "tests" / "fixtures" / "potions"
 
 
+@pytest.fixture(autouse=True)
+def _game_logs_in_tmp(monkeypatch, tmp_path):
+    """Games played in tests never land in the real potions/game_logs/."""
+    import gamelog
+    monkeypatch.setattr(gamelog, "LOG_DIR", tmp_path / "game_logs")
+
+
 # -- rules -----------------------------------------------------------------------
 def test_hex_neighbours_follow_the_half_cell_offset():
     # Even column 2, row 1 touches odd columns 1 and 3 at rows 1 and 2.
@@ -650,3 +657,90 @@ def test_progress_credits_tiers_reached_towards_open_slots():
     b.needs[("blue", 6)] = 0
     b.collected = 1
     assert simulate.progress(b, 1) == 1.0
+
+
+# -- live game logs ---------------------------------------------------------------------
+def _logged_game(folder, turns=12, seed=3):
+    """Play a short simulated game, logging it as the live bot would."""
+    import random
+
+    import gamelog
+    needs = Counter({("blue", 4): 1})
+    pool = ("blue", "green", "red")
+    rng = random.Random(seed)
+    game = gamelog.GameLog(needs, pool, "standard", folder=folder)
+    board = Board(needs=needs)
+
+    def deal():
+        return (rng.choice(pool), 1), (rng.choice(pool), 1)
+    pair, nxt = deal(), deal()
+    for _ in range(turns):
+        c, swapped = best_move(board, pair, nxt)
+        game.turn(board.cols, board.needs, pair, nxt, c, swapped)
+        board.drop(oriented(pair, swapped), c)
+        pair, nxt = nxt, deal()
+    return game
+
+
+def test_a_logged_game_reads_back(tmp_path):
+    import gamelog
+    game = _logged_game(tmp_path)
+    game.mismatch([[("red", 1)]] + [[] for _ in range(7)])
+    path = game.finish("lost", turns_played=12)
+    assert game.finish("lost") is None                     # written once only
+    (g,) = gamelog.load(tmp_path)
+    assert path.parent == tmp_path and g["result"] == "lost"
+    assert g["needs"] == [["blue", 4, 1]] and g["plan_pool"] == ["blue", "green", "red"]
+    assert len(g["turns"]) == 12 and "seen" in g["turns"][-1]
+
+
+def test_livecheck_replays_a_faithful_log_exactly(tmp_path):
+    import gamelog
+    import livecheck
+    _logged_game(tmp_path).finish("lost", turns_played=12, final_pool=["blue", "green", "red"])
+    games = gamelog.load(tmp_path)
+    assert livecheck.reads(games) == (11, 11)
+    agree, checked, examples = livecheck.replay(games)
+    assert agree == checked == 11 and examples == []
+    # A misread board breaks the move into it and the move out of it.
+    games[0]["turns"][5]["board"][0].append(["purple", 3])
+    agree, checked, examples = livecheck.replay(games)
+    assert agree == 9 and [turn for _, turn, _, _ in examples] == [5, 6]
+
+
+def test_livecheck_counts_deals():
+    import livecheck
+    pool = ["blue", "red"]
+    turns = [{"pair": p} for p in ([["red", 1], ["red", 1]], [["red", 1], ["blue", 1]],
+                                   [["blue", 1], ["blue", 1]], [["gray", 1], ["red", 1]])]
+    d = livecheck.deals([{"final_pool": pool, "turns": turns}])[("blue", "red")]
+    assert d["colours"] == Counter({"red": 3, "blue": 3})
+    assert d["same"] == [2, 3] and d["off_pool"] == Counter({"gray": 1})
+    assert livecheck.chi_square(Counter({"red": 50, "blue": 50}), ("blue", "red"))[2]
+    assert not livecheck.chi_square(Counter({"red": 90, "blue": 10}), ("blue", "red"))[2]
+
+
+def test_livecheck_report_runs(tmp_path):
+    import gamelog
+    import livecheck
+    _logged_game(tmp_path).finish("brewed", turns_played=12, final_pool=["blue", "green", "red"],
+                                  final_strategy="standard")
+    text = livecheck.report(gamelog.load(tmp_path), sim_games=2, n_workers=1)
+    assert "live: won 1/1" in text and "sim:  won" in text
+
+
+def test_a_stopped_game_is_still_logged(monkeypatch):
+    import gamelog
+    from brew_bot import Brewer
+    from screen import StopRequested
+    brewer = Brewer(table("board_start").win)
+    monkeypatch.setattr(Brewer, "choose_plan", lambda self, needs: True)
+
+    def stopped(self, t, needs):
+        self.turns = 4
+        raise StopRequested()
+    monkeypatch.setattr(Brewer, "_play_turns", stopped)
+    with pytest.raises(StopRequested):
+        brewer.play()
+    (g,) = gamelog.load(gamelog.LOG_DIR)
+    assert g["result"] == "stopped" and g["turns_played"] == 4

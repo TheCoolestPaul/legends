@@ -27,6 +27,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "repair"))  # shared screen code
 sys.path.insert(0, str(HERE))
 
+import gamelog  # noqa: E402
 import snapshots  # noqa: E402
 from brewing import CODES, COLUMNS, Board, best_move, oriented  # noqa: E402
 from repair_mini_game import session_hotkeys  # noqa: E402
@@ -494,6 +495,8 @@ class Brewer:
         self.dealt, self.dealt_pairs = set(), 0
         self.pool_checked = False
         self.replan = None                  # background re-plan: {"pool", "result"/"error"}
+        self.game = None                    # gamelog.GameLog of the game being played
+        self.end = None                     # why play stopped, when not brewed/lost
 
     def choose_plan(self, needs):
         """Pick a strategy for this recipe from a simulated plan (planner.py)
@@ -586,6 +589,19 @@ class Brewer:
         if not self.choose_plan(needs):
             self.result = "too hard"
             return
+        self.game = gamelog.GameLog(needs, self.plan_pool, self.strategy)
+        try:
+            self._play_turns(t, needs)
+        except BaseException:
+            self.end = self.end or "stopped"
+            raise
+        finally:
+            self.game.finish(self.result or self.end or "no pair", turns_played=self.turns,
+                             mismatches=self.mismatches, dealt=sorted(self.dealt),
+                             final_pool=sorted(self.plan_pool or []),
+                             final_strategy=self.strategy)
+
+    def _play_turns(self, t, needs):
         cols, hand = t.wait_settled()
         turns = lost = 0
         while hand:
@@ -608,6 +624,7 @@ class Brewer:
             t1 = time.monotonic()
             if move is None:
                 log.warning("No room for %s; the board is full", pair)
+                self.end = "no room"
                 break
             c, swapped = move
             want = oriented(pair, swapped)
@@ -621,6 +638,7 @@ class Brewer:
                             c, lost, AIM_RETRIES)
                 snapshots.save(self.win, "hand_lost", "potions")
                 if lost >= AIM_RETRIES:
+                    self.end = "hand lost"
                     break
                 cols, hand = t.wait_settled()
                 continue
@@ -642,6 +660,7 @@ class Brewer:
             t4 = time.monotonic()
             turns += 1
             self.turns = turns
+            self.game.turn(board.cols, board.needs, pair, nxt, c, swapped)
             done = not any(n > 0 for n in predicted.needs.values())
             cols, hand = t.wait_for(predicted.cols, nxt, c, done)
             t5 = time.monotonic()
@@ -661,6 +680,7 @@ class Brewer:
                 break
             if cols != predicted.cols:
                 self.mismatches += 1
+                self.game.mismatch(cols)
                 log.info("Board differs from the prediction after turn %d (%s on %d-%d):\n"
                          "  before    %s\n  seen      %s\n  predicted %s",
                          turns, want, c, c + 1, describe(board.cols), describe(cols),
