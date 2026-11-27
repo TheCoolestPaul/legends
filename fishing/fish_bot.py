@@ -90,6 +90,7 @@ DEPTH_CHANGE = 4.0       # mean grey difference that means the number changed
 BOTTOM_STILL = 3.0       # s without a change: on the bottom
 BOTTOM_WAIT = 60.0       # s resting on the bottom before working the lure up
 SINK_MAX = 180.0         # s at most for sinking plus resting
+NO_SINK_GRACE = 8.0      # s to wait for the number to start moving (shallow water: never)
 SINK_CHECK = 1.0         # s between Sink Lure readiness checks while sinking (not while
                          # working the lure up: sinking it then would undo the climb)
 STEP_REEL = 0.6          # s of reeling per step up
@@ -457,7 +458,7 @@ class Fisher:
         end = begun + (SINK_MAX if sink else seconds)
         next_sink = begun
         depth, depth_moved = None, begun
-        bottomed = False
+        moved = bottomed = False
         while time.monotonic() < end:
             check_stop()
             snapshots.take_requested(self.win, "fishing")
@@ -473,15 +474,20 @@ class Fisher:
                     next_sink = now + SINK_CHECK
                     if t.ready("sink"):
                         self.use("sink")
-                if not bottomed:
-                    shot = t.depth()
-                    if depth is None or np.abs(shot - depth).mean() > DEPTH_CHANGE:
-                        depth, depth_moved = shot, now
-                    elif now - depth_moved >= BOTTOM_STILL:
-                        bottomed = True
-                        end = min(end, now + seconds)
-                        log.debug("lure on the bottom after %.0fs; resting %.0fs",
-                                  now - begun, seconds)
+                # Live: the number holds a few seconds after the lure lands
+                # before it starts going down, so only a stop after it has
+                # moved is the bottom; and if it moves again, it isn't.
+                shot = t.depth()
+                if depth is None:
+                    depth = shot
+                elif np.abs(shot - depth).mean() > DEPTH_CHANGE:
+                    depth, depth_moved, moved, bottomed = shot, now, True, False
+                settled = (depth_moved if moved else begun + NO_SINK_GRACE) + BOTTOM_STILL
+                end = min(begun + SINK_MAX, settled + seconds)
+                if moved and not bottomed and now >= settled:
+                    bottomed = True
+                    log.debug("lure on the bottom after %.0fs; resting %.0fs",
+                              depth_moved - begun, seconds)
             wait(0.05)
         return None
 

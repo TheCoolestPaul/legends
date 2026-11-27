@@ -332,9 +332,10 @@ def test_a_bar_already_bouncing_is_only_set(monkeypatch):
     assert fisher.win.actions == ["click"]          # just the one that sets it
 
 
-def _sinking(monkeypatch, sink_seconds):
-    """A fisher whose lure sinks (depth number changing) for ``sink_seconds``,
-    then lies on the bottom; returns (fisher, clock)."""
+def _sinking(monkeypatch, sink_seconds, pause=0.0):
+    """A fisher whose lure holds still for ``pause`` s after landing, sinks
+    (depth number changing) for ``sink_seconds``, then lies on the bottom;
+    returns (fisher, clock)."""
     fisher = Fisher(FakeWin())
     clock = [0.0]
     monkeypatch.setattr(fish_bot.time, "monotonic", lambda: clock[0])
@@ -342,7 +343,7 @@ def _sinking(monkeypatch, sink_seconds):
     monkeypatch.setattr(fisher.table, "mark", lambda colour: None)
     monkeypatch.setattr(fisher.table, "gauge", lambda: fish_bot.Gauge("green", 1.0))
     monkeypatch.setattr(fisher.table, "depth",
-                        lambda: np.full((50, 70), min(clock[0], sink_seconds) * 10.0))
+                        lambda: np.full((50, 70), min(max(clock[0] - pause, 0), sink_seconds) * 10.0))
     return fisher, clock
 
 
@@ -376,3 +377,20 @@ def test_the_rest_on_the_bottom_starts_once_the_lure_is_there(monkeypatch):
     monkeypatch.setattr(fisher.table, "ready", lambda skill: False)
     assert fisher.watch(60.0, 0.0, sink=True) is None
     assert clock[0] <= fish_bot.SINK_MAX + 1
+
+def test_the_pause_before_sinking_is_not_the_bottom(monkeypatch):
+    """Live: the depth number held for a few seconds after the lure landed,
+    and the bot took that for the bottom ("after 6s") while it kept sinking."""
+    fisher, clock = _sinking(monkeypatch, 30.0, pause=5.0)
+    monkeypatch.setattr(fisher.table, "ready", lambda skill: False)
+    assert fisher.watch(60.0, 0.0, sink=True) is None
+    settled = 5 + 30 + fish_bot.BOTTOM_STILL
+    assert settled + 60 - 1 <= clock[0] <= settled + 61
+
+
+def test_a_lure_that_never_sinks_still_rests_and_moves_on(monkeypatch):
+    fisher, clock = _sinking(monkeypatch, 0.0)               # shallow: no movement at all
+    monkeypatch.setattr(fisher.table, "ready", lambda skill: False)
+    assert fisher.watch(60.0, 0.0, sink=True) is None
+    expect = fish_bot.NO_SINK_GRACE + fish_bot.BOTTOM_STILL + 60
+    assert expect - 1 <= clock[0] <= expect + 1
