@@ -2,8 +2,8 @@
 
 Run from the repo folder:  .venv\\Scripts\\python -m overlay
 (or double-click overlay.pyw). Default hotkeys: F6 shows/hides the panel,
-F7 starts/stops the repair bot, F8 the potions bot, F10 the fishing bot
-(F9 saves a debug frame inside the bots). Backtick still stops a
+F7 starts/stops the repair bot, F8 the potions bot, F10 the fishing bot,
+F11 the poker bot (F9 saves a debug frame inside the bots). Backtick still stops a
 running bot. Settings are saved to overlay/settings.json.
 """
 import ctypes
@@ -200,6 +200,10 @@ class Overlay:
         label(fr, "Fishing: stop after")
         number(fr, ("fishing", "max_fish"))
         label(fr, "fish")
+        fr = row()
+        label(fr, "Poker: stop after")
+        number(fr, ("poker", "max_hands"))
+        label(fr, "hands")
 
         section("Repair")
         fr = row()
@@ -233,10 +237,18 @@ class Overlay:
         fr = row()
         label(fr, "Start on the dock with the rod out; normal fish only.")
 
+        section("Poker")
+        fr = row()
+        check(fr, "Record frames", ("poker", "record"))
+        check(fr, "Debug log", ("poker", "debug"))
+        fr = row()
+        label(fr, "Sit at a Hold'em table; never swaps cards.")
+
         section("Hotkeys")
         self.key_buttons = {}
         for action, text in (("overlay", "Show/hide panel"), ("repair", "Repair on/off"),
-                             ("potions", "Potions on/off"), ("fishing", "Fishing on/off")):
+                             ("potions", "Potions on/off"), ("fishing", "Fishing on/off"),
+                             ("poker", "Poker on/off")):
             fr = row()
             tk.Label(fr, text=text, bg=PANEL, fg=DIM, font=SMALL, width=16,
                      anchor="w").pack(side="left")

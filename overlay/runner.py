@@ -31,6 +31,8 @@ BOTS = {
                 "count": re.compile(r"Brewed (\d+) so far"), "unit": "brews"},
     "fishing": {"title": "Fishing", "script": "fishing/fish_bot.py",
                 "count": re.compile(r"Caught (\d+) so far"), "unit": "fish"},
+    "poker": {"title": "Poker", "script": "poker/poker_bot.py",
+              "count": re.compile(r"Played (\d+) hands so far"), "unit": "hands"},
 }
 LOG_LINE = re.compile(r"^\d\d:\d\d:\d\d (DEBUG|INFO|WARNING|ERROR|CRITICAL) (.*)$")
 # Every run's output is also saved here (git-ignored), one file per run:
@@ -82,6 +84,8 @@ def build_command(bot, settings, python=None):
         cmd += ["--max-ships", str(opts["max_ships"])]
     if bot == "fishing" and opts.get("max_fish"):
         cmd += ["--max-fish", str(opts["max_fish"])]
+    if bot == "poker" and opts.get("max_hands"):
+        cmd += ["--max-hands", str(opts["max_hands"])]
     if bot == "potions":
         recipes = opts.get("recipes", "").strip()
         if opts.get("fill"):

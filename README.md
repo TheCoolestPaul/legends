@@ -33,6 +33,7 @@ Default hotkeys (rebind them in the panel's settings):
 | F7 | start / stop the repair bot |
 | F8 | start / stop the potion bot |
 | F10 | start / stop the fishing bot |
+| F11 | start / stop the poker bot |
 | `` ` `` | stop a running bot (the bots' own kill switch) |
 
 F9 is reserved for saving a debug frame. Each bot runs as its own process, using `.venv` if there is one. Only one bot runs at a time, since both drive the same game window, so starting one stops the other first. The panel shows each bot's last log line and its ship or brew count. Settings (input mode, time limit, ship/brew limits, recipes, `--record`/`--debug`) apply on the next start and are saved to `overlay/settings.json` (git-ignored). Closing the panel stops any running bot, and terminates it if it hasn't exited a few seconds later. Every bot run's output is also saved to `logs/<bot>-<date>-<time>.log` (git-ignored, kept 14 days).
@@ -60,6 +61,15 @@ It works in the background (the game can sit behind other windows) and only on n
 - On a catch: OK, "Take Small Items", then the trash can (Yes when it asks about binning a "specially dyed" item). A picture of each catch panel goes to `debug_frames/fishing_catches/`.
 
 The game ends a fishing session after about a minute on the dock without a cast, so the bot casts again straight away. A stolen lure stops it (re-equip one from Lures); legendary fish aren't handled.
+
+## Poker bot
+Sit down at a Texas Hold'em table, then press F11 in the overlay or run:
+
+```
+.venv\Scripts\python poker\poker_bot.py            (--max-hands N, --debug, --record)
+```
+
+It works in the background and only acts on its own turn (when the action buttons show at the bottom). It reads its two cards and the board, deals the unseen cards at random several hundred times against the players still holding cards to estimate its chance of winning, then bets or raises with a strong hand, checks or calls with at least a fair share (1 in the number of players), and otherwise checks if that's free or folds. It never presses the Swap Card buttons (that's cheating). A card it can't read gets a debug frame and a check or fold. Every decision is logged to `logs/poker-<date>.jsonl`.
 
 ## Repair bots
 Open the repair screen on a ship, then run:
