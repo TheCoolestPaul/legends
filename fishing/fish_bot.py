@@ -54,9 +54,10 @@ CAUGHT_OK = (2198, 803)
 LOOT_REGION = (450, 273, 700, 200)         # "Plundered from a ..." (top-left part)
 TAKE_SMALL = (1090, 705)                   # "Take Small Items" / "Take It All!"
 LOOT_TRASH = (606, 380)                    # closes the loot window
-# Binning loot with a specially dyed item asks "Are you sure ...?": No.
+# Binning loot with a specially dyed item asks "Are you sure ...?": Yes
+# (the user would rather discard those too).
 CONFIRM_REGION = (1000, 420, 560, 640)
-CONFIRM_NO = (1335, 928)
+CONFIRM_YES = (1223, 928)
 MARKER_MATCH = 0.8
 # "Fishing" under the skill bar: there in every fishing state (0.94-1.0),
 # gone in the open world (0.30; live, the session had ended and the
@@ -95,13 +96,16 @@ DROP = 1.5 / (HEALTH_BOTTOM - HEALTH_TOP)   # a loss this big means the fish is 
 # Tug Line stops the fish at once, so after it the reel can go on almost
 # straight away; without it, wait it out, longer each time it still pulls
 # (trying again costs line too).
-TUG_RESUME = 0.4
+# Live, 0.4 s was dead time (the user: wasted ms); the key press itself
+# takes ~60 ms, and if the fish still pulls the next gauge read lets go.
+TUG_RESUME = 0.1
 PAUSE = 1.5              # s to let go when the fish pulls and Tug Line isn't ready
 PAUSE_MAX = 4.0
 HEAL_BELOW = 0.45        # line health share for Heal Line
 PULL_ABOVE = 0.7         # ... and for Pull Fish
 FIGHT_TIMEOUT = 300.0
-LOOT_WAIT = 12.0         # s after OK for the loot window (it has its own 60 s countdown)
+LOOT_WAIT = 12.0         # s at most for the catch panel and loot window to be dealt with
+LOOT_GRACE = 2.0         # s with neither showing before casting again (some fish have no loot)
 CATCH_LOG = REPO_ROOT / "debug_frames" / "fishing_catches"
 
 
@@ -479,14 +483,24 @@ class Fisher:
         self.win.press(*CAUGHT_OK)
         self.win.park_mouse()
         deadline = time.monotonic() + LOOT_WAIT
+        clear_since = None                         # panel gone, no loot window yet
         while time.monotonic() < deadline:
             check_stop()
-            wait(0.3)
+            wait(0.2)
             self.win.refresh()
             if t.caught():
                 self.win.press(*CAUGHT_OK)         # the first press was lost
                 self.win.park_mouse()
+                clear_since = None
                 continue
+            if not t.loot() and not t.confirm():
+                # Not every fish has loot (live: a catch without any sat out
+                # the whole wait before casting again).
+                clear_since = clear_since or time.monotonic()
+                if time.monotonic() - clear_since >= LOOT_GRACE:
+                    return True
+                continue
+            clear_since = None
             if t.confirm():
                 self.answer_confirm()
                 continue
@@ -505,16 +519,11 @@ class Fisher:
 
     def answer_confirm(self):
         """ "Are you sure you want to trash a specially dyed clothing
-        item?": No (the user, Nov 2026), then "Take It All!" (where "Take
-        Small Items" was) to keep it and clear the window. If the window
-        stays, its own 60 s countdown closes it."""
-        log.info("The loot has a specially dyed item: keeping it (No to trashing it).")
-        self.win.press(*CONFIRM_NO)
+        item?": Yes, bin it (the user, Nov 2026: rather discard those)."""
+        log.info("The loot has a specially dyed item: binning it anyway (Yes).")
+        self.win.press(*CONFIRM_YES)
+        self.win.park_mouse()
         wait(0.6)
-        if self.table.loot():
-            self.win.press(*TAKE_SMALL)
-            self.win.park_mouse()
-            wait(0.6)
 
     def log_catch(self):
         """Keep a small picture of the catch panel (fish, weight, rewards)."""

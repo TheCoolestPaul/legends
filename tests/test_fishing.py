@@ -226,3 +226,29 @@ def test_a_cast_with_the_lure_still_out_says_so(monkeypatch):
     monkeypatch.setattr(fish_bot, "BAR_WAIT", 0.0)
     assert fisher.cast() == "out"
     assert fisher.win.actions == ["click"]
+
+
+def test_a_catch_without_loot_is_left_quickly(monkeypatch):
+    """Live: a catch with no loot window waited the whole loot wait (13 s
+    from catch to cast) before casting again."""
+    fisher = Fisher(FakeWin())
+    fisher.win.park_mouse = fisher.win.refresh = lambda: None
+    clock = [0.0]
+    monkeypatch.setattr(fish_bot.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(fish_bot, "wait", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(fisher, "log_catch", lambda: None)
+    for name in ("caught", "loot", "confirm"):
+        monkeypatch.setattr(fisher.table, name, lambda: False)
+    assert fisher.collect()
+    assert clock[0] <= fish_bot.LOOT_GRACE + 0.5
+
+
+def test_a_dyed_item_is_binned_anyway(monkeypatch):
+    """The user would rather discard specially dyed items: Yes, not No."""
+    presses = []
+    fisher = Fisher(FakeWin())
+    fisher.win.press = lambda x, y: presses.append((x, y))
+    fisher.win.park_mouse = lambda: None
+    monkeypatch.setattr(fish_bot, "wait", lambda s: None)
+    fisher.answer_confirm()
+    assert presses == [fish_bot.CONFIRM_YES]

@@ -57,7 +57,7 @@ It works in the background (the game can sit behind other windows) and only on n
 - Cast at full power (one click starts the power bar, a second sets it near the top) and Sink Lure (5) to the bottom, where the better fish are.
 - Wait there, then work the lure up a step at a time, held with Stall Lure (1) at each depth: fish swim side to side at their own depth and only bite a lure held still in front of them. A bite (the green "!") is hooked at once.
 - Reel by holding the button and let go the moment the line loses any health (the gauge is read about every 10 ms while holding) or the red "!" shows, with Tug Line (4) to stop the fish; Heal Line (3) when the line runs low, Pull Fish (2) while it's healthy.
-- On a catch: OK, "Take Small Items", then the trash can; a "specially dyed" item is kept (No to binning it, then "Take It All!"). A picture of each catch panel goes to `debug_frames/fishing_catches/`.
+- On a catch: OK, "Take Small Items", then the trash can (Yes when it asks about binning a "specially dyed" item). A picture of each catch panel goes to `debug_frames/fishing_catches/`.
 
 The game ends a fishing session after about a minute on the dock without a cast, so the bot casts again straight away. A stolen lure stops it (re-equip one from Lures); legendary fish aren't handled.
 
