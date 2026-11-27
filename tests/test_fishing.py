@@ -394,3 +394,21 @@ def test_a_lure_that_never_sinks_still_rests_and_moves_on(monkeypatch):
     assert fisher.watch(60.0, 0.0, sink=True) is None
     expect = fish_bot.NO_SINK_GRACE + fish_bot.BOTTOM_STILL + 60
     assert expect - 1 <= clock[0] <= expect + 1
+
+def test_a_stolen_lure_brings_up_choose_your_lure():
+    """Live, after 73 catches: "Choose your lure." (Regular x8, Legendary x10)."""
+    assert table("choose_lure").choose_lure()
+    for name in ("idle", "idle_day", "loot", "caught", "trash_confirm", "line_full"):
+        assert not table(name).choose_lure(), name
+
+
+def test_the_regular_lure_is_picked(monkeypatch):
+    presses = []
+    fisher = Fisher(FakeWin())
+    fisher.win.press = lambda x, y: presses.append((x, y))
+    fisher.win.park_mouse = fisher.win.refresh = lambda: None
+    monkeypatch.setattr(fish_bot, "wait", lambda s: None)
+    shown = iter([False])
+    monkeypatch.setattr(fisher.table, "choose_lure", lambda: next(shown, False))
+    assert fisher.pick_lure()
+    assert presses == [fish_bot.REGULAR_LURES]

@@ -56,6 +56,10 @@ CAUGHT_OK = (2198, 803)
 LOOT_REGION = (450, 273, 700, 200)         # "Plundered from a ..." (top-left part)
 TAKE_SMALL = (1090, 705)                   # "Take Small Items" / "Take It All!"
 LOOT_TRASH = (606, 380)                    # closes the loot window
+# When a fish steals the lure, the next cast brings up "Choose your lure."
+# (live, after 73 catches): Regular Lures (never the Legendary ones).
+LURE_REGION = (1900, 843, 600, 440)
+REGULAR_LURES = (2082, 1068)
 # Binning loot with a specially dyed item asks "Are you sure ...?": Yes
 # (the user would rather discard those too).
 CONFIRM_REGION = (1000, 420, 560, 640)
@@ -275,6 +279,12 @@ class Table:
             return None
         return (SCENE_REGION[0] + found[0] / self.win.scale,
                 SCENE_REGION[1] + found[1] / self.win.scale)
+
+    def choose_lure(self):
+        """ "Choose your lure." (the last one was stolen)."""
+        score, _ = match_marker(self.win.grab(*LURE_REGION), "fishing/choose_lure.png",
+                                self.win.scale)
+        return score >= MARKER_MATCH
 
     def depth(self):
         """The depth number above the gauge, as a small grey image (only
@@ -671,6 +681,19 @@ class Fisher:
                     return True
         return not t.loot() and not t.caught()
 
+    def pick_lure(self):
+        """A fish stole the lure: pick Regular Lures. True once the window
+        is gone (False if it stays: none left?)."""
+        for _ in range(2):
+            log.info("The lure was stolen; putting on a regular one.")
+            self.win.press(*REGULAR_LURES)
+            self.win.park_mouse()
+            wait(1.0)
+            self.win.refresh()
+            if not self.table.choose_lure():
+                return True
+        return False
+
     def answer_confirm(self):
         """ "Are you sure you want to trash a specially dyed clothing
         item?": Yes, bin it (the user, Nov 2026: rather discard those)."""
@@ -699,6 +722,8 @@ class Fisher:
             return "not fishing"
         if self.table.caught() or self.table.loot() or self.table.confirm():
             self.collect()
+        if self.table.choose_lure() and not self.pick_lure():
+            return "no lures"
         hooked = False
         cast = self.cast()
         if cast == "out":                          # a lure already in the water
@@ -744,7 +769,13 @@ def fish_loop(win, max_fish=0):
                         "spot with the rod out. Stopping.")
             snapshots.save(win, "not_fishing", "fishing", force=True)
             break
+        if result == "no lures":
+            log.warning("Couldn't put on a regular lure (none left?); stopping.")
+            snapshots.save(win, "no_lures", "fishing", force=True)
+            break
         if result == "stuck":
+            if fisher.table.choose_lure():         # the failed cast brought it up
+                continue
             stuck += 1
             snapshots.save(win, "fishing_stuck", "fishing", force=True)
             if stuck >= 3:
