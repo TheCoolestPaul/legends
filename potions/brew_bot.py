@@ -282,8 +282,11 @@ class PotionTable:
         tier; the border gives the colour (unmade icons are grey)."""
         x, y = recipe_centre(i)
         colour = self.border_colour(x, y)
-        if colour is None:                  # no slot here, or a gray border
+        if colour is None:                  # bare parchment, or unsure
             return self.piece_at(x, y)[0]
+        # A gray border has too little colour to tell from its pixels, but it
+        # is still a slot: match its icon among the gray ones like any other
+        # (live: Addled Elixir's two unmade Gold Gems, gray 5, read as no slot).
         tmpl, patch = self._patch(x, y)
         if patch is None:
             return None
@@ -296,7 +299,8 @@ class PotionTable:
 
     def border_colour(self, x, y):
         """Colour of the hex border around ref (x, y): a BORDER_COLOURS key,
-        or None when it can't tell (a gray border, or no slot)."""
+        "gray" when the ring has hardly any colour (a gray border), or None
+        for bare parchment (no slot)."""
         s = self.win.scale
         r1 = BORDER_RING[1]
         img = self._grab(x - r1, y - r1, 2 * r1 + 1, 2 * r1 + 1).astype(int)
@@ -306,7 +310,7 @@ class PotionTable:
         px = img[(d >= BORDER_RING[0]) & (d <= BORDER_RING[1])]
         px = px[px.max(axis=1) - px.min(axis=1) > 40]
         if len(px) < MIN_BORDER_PIXELS * s * s:
-            return None
+            return "gray"
         med = np.median(px, axis=0)
         return min(BORDER_COLOURS, key=lambda k: float(np.sum((med - BORDER_COLOURS[k]) ** 2)))
 

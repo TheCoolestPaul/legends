@@ -788,3 +788,10 @@ def test_livecheck_splits_lost_clicks_by_the_players_activity():
     assert c["drop"] == {"busy": [1, 2], "quiet": [0, 1]}
     assert c["aim"] == {"busy": [0, 0], "quiet": [0, 1]}      # 900 ms away: quiet
     assert c["all"] == {"busy": [1, 2], "quiet": [0, 2]}
+
+
+def test_gray_recipe_slots_with_unmade_icons_still_count():
+    """Live: Addled Elixir's two unmade Gold Gems (gray 5, grey icons in a
+    gray border) read as no slot, so the bot played for the three checked
+    red/blue/green 3s and never built a Gold Gem."""
+    assert table("addled_elixir").read_recipe() == Counter({("gray", 5): 2})
