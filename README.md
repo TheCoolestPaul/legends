@@ -32,6 +32,7 @@ Default hotkeys (rebind them in the panel's settings):
 | F6 | show / hide the panel |
 | F7 | start / stop the repair bot |
 | F8 | start / stop the potion bot |
+| F10 | start / stop the fishing bot |
 | `` ` `` | stop a running bot (the bots' own kill switch) |
 
 F9 is reserved for saving a debug frame. Each bot runs as its own process, using `.venv` if there is one. Only one bot runs at a time, since both drive the same game window, so starting one stops the other first. The panel shows each bot's last log line and its ship or brew count. Settings (input mode, time limit, ship/brew limits, recipes, `--record`/`--debug`) apply on the next start and are saved to `overlay/settings.json` (git-ignored). Closing the panel stops any running bot, and terminates it if it hasn't exited a few seconds later. Every bot run's output is also saved to `logs/<bot>-<date>-<time>.log` (git-ignored, kept 14 days).
@@ -43,6 +44,22 @@ Tick **Fill up all potions** in the panel's Potions settings (or run `.venv\Scri
 - Greyed-out recipes (locked, or for another island) are skipped, and so are recipes the planner expects to lose often (tick **Any tier** to play them anyway) and ones lost three times in a row.
 - A lost game starts the same recipe again: the bot finds it in the list by its name.
 - Once every recipe is full or skipped, it brews the first recipe in the list until stopped, answering **OK** to keep going for the reputation.
+
+## Fishing bot
+Stand on a fishing dock with the rod out (the fishing skill bar showing), then press F10 in the overlay or run:
+
+```
+.venv\Scripts\python fishing\fish_bot.py            (--max-fish N, --debug, --record)
+```
+
+It works in the background (the game can sit behind other windows) and only on normal fish; it won't click at all unless the fishing skill bar is up. Each catch:
+
+- Cast at full power (one click starts the power bar, a second sets it near the top) and Sink Lure (5) to the bottom, where the better fish are.
+- Wait there, then work the lure up a step at a time, held with Stall Lure (1) at each depth: fish swim side to side at their own depth and only bite a lure held still in front of them. A bite (the green "!") is hooked at once.
+- Reel by holding the button and let go the moment the line loses any health (the gauge is read about every 10 ms while holding) or the red "!" shows, with Tug Line (4) to stop the fish; Heal Line (3) when the line runs low, Pull Fish (2) while it's healthy.
+- On a catch: OK, "Take Small Items", then the trash can; a "specially dyed" item is kept (No to binning it, then "Take It All!"). A picture of each catch panel goes to `debug_frames/fishing_catches/`.
+
+The game ends a fishing session after about a minute on the dock without a cast, so the bot casts again straight away. A stolen lure stops it (re-equip one from Lures); legendary fish aren't handled.
 
 ## Repair bots
 Open the repair screen on a ship, then run:

@@ -2,7 +2,8 @@
 
 Run from the repo folder:  .venv\\Scripts\\python -m overlay
 (or double-click overlay.pyw). Default hotkeys: F6 shows/hides the panel,
-F7 starts/stops the repair bot, F8 the potions bot. Backtick still stops a
+F7 starts/stops the repair bot, F8 the potions bot, F10 the fishing bot
+(F9 saves a debug frame inside the bots). Backtick still stops a
 running bot. Settings are saved to overlay/settings.json.
 """
 import ctypes
@@ -195,6 +196,10 @@ class Overlay:
         label(fr, "Potions: stop after")
         number(fr, ("potions", "max_brews"))
         label(fr, "brews (when no recipes are set)")
+        fr = row()
+        label(fr, "Fishing: stop after")
+        number(fr, ("fishing", "max_fish"))
+        label(fr, "fish")
 
         section("Repair")
         fr = row()
@@ -221,10 +226,17 @@ class Overlay:
         check(fr, "Record frames", ("potions", "record"))
         check(fr, "Debug log", ("potions", "debug"))
 
+        section("Fishing")
+        fr = row()
+        check(fr, "Record frames", ("fishing", "record"))
+        check(fr, "Debug log", ("fishing", "debug"))
+        fr = row()
+        label(fr, "Start on the dock with the rod out; normal fish only.")
+
         section("Hotkeys")
         self.key_buttons = {}
         for action, text in (("overlay", "Show/hide panel"), ("repair", "Repair on/off"),
-                             ("potions", "Potions on/off")):
+                             ("potions", "Potions on/off"), ("fishing", "Fishing on/off")):
             fr = row()
             tk.Label(fr, text=text, bg=PANEL, fg=DIM, font=SMALL, width=16,
                      anchor="w").pack(side="left")

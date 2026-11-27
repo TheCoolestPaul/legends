@@ -11,10 +11,11 @@ SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 DEFAULTS = {
     "input": "background",          # or "mouse" (TLOPO_INPUT)
     "max_minutes": 0,               # every bot: stop after this long (0: no limit)
-    "hotkeys": {"overlay": "F6", "repair": "F7", "potions": "F8"},
+    "hotkeys": {"overlay": "F6", "repair": "F7", "potions": "F8", "fishing": "F10"},
     "repair": {"record": False, "debug": False, "max_ships": 0},
     "potions": {"recipes": "", "count": 1, "any_tier": False, "fill": False,
                 "record": False, "debug": False, "max_brews": 0},
+    "fishing": {"record": False, "debug": False, "max_fish": 0},
     "position": None,               # [x, y] of the panel, None: next to the game
     "visible": True,
 }

@@ -83,6 +83,8 @@ BG_CLICK_HOLD = 0.01    # s the button is held
 WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
 WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
 WM_XBUTTONDOWN, WM_XBUTTONUP = 0x020B, 0x020C
+WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+KEY_HOLD = 0.05         # s a posted key is held
 MK_LBUTTON, MK_RBUTTON, MK_XBUTTON1, XBUTTON1 = 0x0001, 0x0002, 0x0020, 0x0001
 PRINTWINDOW_REUSE = 0.015  # s; one PrintWindow frame serves grabs this close together
 PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
@@ -809,6 +811,33 @@ class GameWindow:
         return (self.rect.left + self.rect.width // 2,
                 self.rect.top + max(5, round(PARK_FROM_TOP * self.scale)))
 
+    def key(self, char):
+        """Press and release a key (a digit or letter) in the game.
+
+        Background: WM_KEYDOWN/WM_KEYUP posted to the game window (live,
+        Nov 2026: the fishing skill keys 1-6 work this way, with the game
+        behind other windows and the real keyboard untouched). Mouse mode:
+        a real key press, only while the game is in front.
+        """
+        vk = ord(char.upper())
+        if self.background:
+            if self.hwnd is None:
+                return
+            if self not in _background_windows:
+                _background_windows.append(self)
+            user32 = ctypes.windll.user32
+            lparam = 1 | (user32.MapVirtualKeyW(vk, 0) << 16)
+            user32.PostMessageW(self.hwnd, WM_KEYDOWN, vk, ctypes.c_ssize_t(lparam))
+            time.sleep(KEY_HOLD)
+            user32.PostMessageW(self.hwnd, WM_KEYUP, vk,
+                                ctypes.c_ssize_t(lparam | 0xC0000000))
+            time.sleep(BG_PAUSE)
+            return
+        if self._input_target(REF_CENTER_X, REF_CENTER_Y) is None:   # waits for the game in front
+            return
+        import pyautogui
+        pyautogui.press(char.lower())
+
 
 class ImageWindow(GameWindow):
     """A GameWindow backed by a screenshot file, for offline tests.
@@ -847,6 +876,9 @@ class ImageWindow(GameWindow):
 
     def right_click(self, x, y):
         self.actions.append(("right", self.to_screen(x, y)))
+
+    def key(self, char):
+        self.actions.append(("key", char))
 
     def park_mouse(self):
         pass

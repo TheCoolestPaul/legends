@@ -29,6 +29,8 @@ BOTS = {
                "count": re.compile(r"Ship repaired \((\d+) so far\)"), "unit": "ships"},
     "potions": {"title": "Potions", "script": "potions/brew_bot.py",
                 "count": re.compile(r"Brewed (\d+) so far"), "unit": "brews"},
+    "fishing": {"title": "Fishing", "script": "fishing/fish_bot.py",
+                "count": re.compile(r"Caught (\d+) so far"), "unit": "fish"},
 }
 LOG_LINE = re.compile(r"^\d\d:\d\d:\d\d (DEBUG|INFO|WARNING|ERROR|CRITICAL) (.*)$")
 # Every run's output is also saved here (git-ignored), one file per run:
@@ -78,6 +80,8 @@ def build_command(bot, settings, python=None):
         cmd += ["--max-minutes", str(settings["max_minutes"])]
     if bot == "repair" and opts.get("max_ships"):
         cmd += ["--max-ships", str(opts["max_ships"])]
+    if bot == "fishing" and opts.get("max_fish"):
+        cmd += ["--max-fish", str(opts["max_fish"])]
     if bot == "potions":
         recipes = opts.get("recipes", "").strip()
         if opts.get("fill"):

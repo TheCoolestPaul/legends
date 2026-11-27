@@ -372,3 +372,16 @@ def test_potions_fill_command():
     cmd = runner.build_command("potions", opts(potions__fill=True, potions__recipes="Deadeye I",
                                                potions__any_tier=True), python="py")
     assert cmd[3:] == ["--fill", "--any-tier"]                 # fill wins over recipes
+
+
+def test_fishing_command_with_a_limit():
+    cmd = runner.build_command("fishing", opts(fishing__max_fish=5, fishing__debug=True),
+                               python="py")
+    assert cmd[2].endswith("fish_bot.py")
+    assert cmd[3:] == ["--debug", "--max-fish", "5"]
+    assert runner.build_command("fishing", opts(), python="py")[3:] == []
+
+
+def test_the_fishing_bot_has_a_default_hotkey_and_counts_catches():
+    assert settings.DEFAULTS["hotkeys"]["fishing"] == "F10"
+    assert runner.BOTS["fishing"]["count"].search("12:00:00 INFO Caught 4 so far.").group(1) == "4"
