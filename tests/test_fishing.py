@@ -332,25 +332,47 @@ def test_a_bar_already_bouncing_is_only_set(monkeypatch):
     assert fisher.win.actions == ["click"]          # just the one that sets it
 
 
-def test_sink_lure_is_used_whenever_ready_while_sinking(monkeypatch):
-    """The user: Sink Lure is often still cooling down right after a cast;
-    use it as soon as it's ready while the lure goes down."""
+def _sinking(monkeypatch, sink_seconds):
+    """A fisher whose lure sinks (depth number changing) for ``sink_seconds``,
+    then lies on the bottom; returns (fisher, clock)."""
     fisher = Fisher(FakeWin())
     clock = [0.0]
     monkeypatch.setattr(fish_bot.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(fish_bot, "wait", lambda s: clock.__setitem__(0, clock[0] + s))
     monkeypatch.setattr(fisher.table, "mark", lambda colour: None)
     monkeypatch.setattr(fisher.table, "gauge", lambda: fish_bot.Gauge("green", 1.0))
+    monkeypatch.setattr(fisher.table, "depth",
+                        lambda: np.full((50, 70), min(clock[0], sink_seconds) * 10.0))
+    return fisher, clock
+
+
+def test_sink_lure_is_used_whenever_ready_while_sinking(monkeypatch):
+    """The user: Sink Lure is often still cooling down right after a cast;
+    use it as soon as it's ready while the lure goes down."""
+    fisher, clock = _sinking(monkeypatch, 20.0)
     ready_at = [3.0]                              # cooling down for 3 s after the cast
     monkeypatch.setattr(fisher.table, "ready",
                         lambda skill: skill == "sink" and clock[0] >= ready_at[0])
 
     def use(skill):
         fisher.win.actions.append(skill)
-        ready_at[0] = clock[0] + 100              # used: cooling down again
+        ready_at[0] = clock[0] + 1000             # used: cooling down again
     monkeypatch.setattr(fisher, "use", use)
     assert fisher.watch(10.0, 0.0, sink=True) is None
     assert fisher.win.actions == ["sink"]
     fisher.win.actions.clear()
     assert fisher.watch(5.0, 0.0) is None         # working the lure up: never
     assert fisher.win.actions == []
+
+
+def test_the_rest_on_the_bottom_starts_once_the_lure_is_there(monkeypatch):
+    """The user: reaching the bottom sometimes took the whole old 60 s
+    wait. The rest now starts when the depth number stops changing."""
+    fisher, clock = _sinking(monkeypatch, 75.0)  # a long way down
+    monkeypatch.setattr(fisher.table, "ready", lambda skill: False)
+    assert fisher.watch(60.0, 0.0, sink=True) is None
+    assert 75 + fish_bot.BOTTOM_STILL + 60 - 1 <= clock[0] <= 75 + fish_bot.BOTTOM_STILL + 61
+    fisher, clock = _sinking(monkeypatch, 1e9)   # never settles: capped
+    monkeypatch.setattr(fisher.table, "ready", lambda skill: False)
+    assert fisher.watch(60.0, 0.0, sink=True) is None
+    assert clock[0] <= fish_bot.SINK_MAX + 1

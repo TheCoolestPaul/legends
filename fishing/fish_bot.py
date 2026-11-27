@@ -81,7 +81,15 @@ BAR_WAIT = 2.5           # s for the power bar to come up after the first click
 # Fish swim side to side at their own depth and bite a lure held still in
 # front of them (the user, Nov 2026): rest on the bottom first (the best
 # fish), then work the lure up a step at a time, stalling at each depth.
-BOTTOM_WAIT = 60.0       # s on the bottom before working the lure up
+# How long it takes to reach the bottom varies (the user: sometimes the
+# whole old 60 s wait), so the depth counter above the gauge tells: while
+# it keeps changing the lure is still sinking; once it's held still for
+# BOTTOM_STILL the lure is down, and it rests there BOTTOM_WAIT more.
+DEPTH_REGION = (60, 303, 70, 50)          # the depth number above the gauge
+DEPTH_CHANGE = 4.0       # mean grey difference that means the number changed
+BOTTOM_STILL = 3.0       # s without a change: on the bottom
+BOTTOM_WAIT = 60.0       # s resting on the bottom before working the lure up
+SINK_MAX = 180.0         # s at most for sinking plus resting
 SINK_CHECK = 1.0         # s between Sink Lure readiness checks while sinking (not while
                          # working the lure up: sinking it then would undo the climb)
 STEP_REEL = 0.6          # s of reeling per step up
@@ -267,6 +275,11 @@ class Table:
         return (SCENE_REGION[0] + found[0] / self.win.scale,
                 SCENE_REGION[1] + found[1] / self.win.scale)
 
+    def depth(self):
+        """The depth number above the gauge, as a small grey image (only
+        compared with itself over time, to see whether it changes)."""
+        return self.win.grab(*DEPTH_REGION).astype(np.int16).mean(axis=2)
+
     def confirm(self):
         """ "Are you sure you want to trash ...?" (a specially dyed item)."""
         score, _ = match_marker(self.win.grab(*CONFIRM_REGION), "fishing/are_you_sure.png",
@@ -433,12 +446,18 @@ class Fisher:
 
     def watch(self, seconds, since, sink=False):
         """Watch the lure for ``seconds``: "bite" (green "!", hooked with a
-        click), "gone" (the lure is back on the dock) or None. With
-        ``sink``, use Sink Lure whenever it's ready (the user: it's often
-        still cooling down right after the cast, ready again soon after)."""
+        click), "gone" (the lure is back on the dock) or None.
+
+        With ``sink`` it's the way down: ``seconds`` is how long to rest
+        once on the bottom (the depth number stopped changing), up to
+        SINK_MAX in all, and Sink Lure is used whenever it's ready (the
+        user: it's often still cooling down right after the cast)."""
         t = self.table
-        end = time.monotonic() + seconds
-        next_sink = time.monotonic()
+        begun = time.monotonic()
+        end = begun + (SINK_MAX if sink else seconds)
+        next_sink = begun
+        depth, depth_moved = None, begun
+        bottomed = False
         while time.monotonic() < end:
             check_stop()
             snapshots.take_requested(self.win, "fishing")
@@ -448,10 +467,21 @@ class Fisher:
                 return "bite"
             if not t.gauge().line:
                 return "gone"
-            if sink and time.monotonic() >= next_sink:
-                next_sink = time.monotonic() + SINK_CHECK
-                if t.ready("sink"):
-                    self.use("sink")
+            if sink:
+                now = time.monotonic()
+                if now >= next_sink:
+                    next_sink = now + SINK_CHECK
+                    if t.ready("sink"):
+                        self.use("sink")
+                if not bottomed:
+                    shot = t.depth()
+                    if depth is None or np.abs(shot - depth).mean() > DEPTH_CHANGE:
+                        depth, depth_moved = shot, now
+                    elif now - depth_moved >= BOTTOM_STILL:
+                        bottomed = True
+                        end = min(end, now + seconds)
+                        log.debug("lure on the bottom after %.0fs; resting %.0fs",
+                                  now - begun, seconds)
             wait(0.05)
         return None
 
