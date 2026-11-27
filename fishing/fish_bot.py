@@ -386,9 +386,17 @@ class Fisher:
         on the dock after a catch until the next cast. So the click comes
         first, and only a bar that came and went counts as a cast."""
         t = self.table
-        # Live: a quick first click on an idle dock was sometimes missed;
-        # the deliberate hover-press-hold one menu buttons get is not.
-        self.win.press(*CAST_POINT)
+        # Live: a stray click while collecting a catch (on a window that had
+        # just closed) sometimes started the power bar, so our "start"
+        # click set it at random power and the bar we waited for never came.
+        # If the bar is already bouncing, only the setting click is needed.
+        if t.gauge().kind != "cast":
+            # Live: a quick first click on an idle dock was sometimes
+            # missed; the deliberate hover-press-hold one menu buttons get
+            # is not.
+            self.win.press(*CAST_POINT)
+        else:
+            log.debug("the power bar is already up; just setting it")
         deadline = time.monotonic() + CAST_TIMEOUT
         bar_by = time.monotonic() + BAR_WAIT
         last = None
@@ -633,8 +641,9 @@ class Fisher:
         try:
             from PIL import Image
             CATCH_LOG.mkdir(parents=True, exist_ok=True)
+            # JPEG: a PNG of the panel was ~370 KB, ~20 MB an hour of fishing.
             Image.fromarray(self.win.grab(*CAUGHT_REGION)).save(
-                CATCH_LOG / (time.strftime("%Y%m%d-%H%M%S") + ".png"))
+                CATCH_LOG / (time.strftime("%Y%m%d-%H%M%S") + ".jpg"), quality=88)
         except Exception:
             log.debug("couldn't save the catch panel", exc_info=True)
 

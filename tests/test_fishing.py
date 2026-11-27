@@ -179,8 +179,8 @@ def test_a_cast_clicks_twice_and_sets_the_bar_near_the_top(monkeypatch):
 def test_a_falling_bar_is_not_set(monkeypatch):
     """The bar bounces: only click while it rises past the mark."""
     fisher = Fisher(FakeWin())
-    levels = iter([("cast", 0.97), ("cast", 0.9), ("cast", 0.5), ("cast", 0.8), ("cast", 0.97),
-                   ("green", 1.0)])
+    levels = iter([(None, 0.0), ("cast", 0.97), ("cast", 0.9), ("cast", 0.5), ("cast", 0.8),
+                   ("cast", 0.97), ("green", 1.0)])
 
     def gauge():
         return fish_bot.Gauge(*next(levels, ("green", 1.0)))
@@ -319,3 +319,14 @@ def test_a_sea_the_colour_of_the_letters_is_not_the_label():
     """Lettering you can't see isn't there: a cream-coloured region alone."""
     cream = (np.zeros((119, 700, 3)) + np.array([229, 220, 187])).astype(np.uint8)
     assert not fish_bot.label_found(cream, 1.0)
+
+def test_a_bar_already_bouncing_is_only_set(monkeypatch):
+    """Live: a stray click while collecting started the bar; the bot's own
+    "start" click then set it at random power."""
+    fisher = Fisher(FakeWin())
+    levels = iter([("cast", 0.4), ("cast", 0.4), ("cast", 0.7), ("cast", 0.97), ("cast", 0.9),
+                   ("green", 1.0)])
+    monkeypatch.setattr(fisher.table, "gauge", lambda: fish_bot.Gauge(*next(levels, ("green", 1.0))))
+    monkeypatch.setattr(fish_bot, "wait", lambda s: None)
+    assert fisher.cast() is True
+    assert fisher.win.actions == ["click"]          # just the one that sets it
