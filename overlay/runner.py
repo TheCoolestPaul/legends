@@ -80,7 +80,9 @@ def build_command(bot, settings, python=None):
         cmd += ["--max-ships", str(opts["max_ships"])]
     if bot == "potions":
         recipes = opts.get("recipes", "").strip()
-        if recipes:
+        if opts.get("fill"):
+            cmd.append("--fill")
+        elif recipes:
             cmd += ["--recipes", recipes, "--count", str(max(1, opts.get("count", 1)))]
         elif opts.get("max_brews"):
             cmd += ["--max-brews", str(opts["max_brews"])]

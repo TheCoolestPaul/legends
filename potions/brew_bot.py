@@ -81,11 +81,20 @@ TITLE_REGION = (475, 273, 610, 48)        # the recipe's name on the board scree
 LIST_TEXT_REGION = (1440, 203, 470, 960)  # recipe names in the list
 LIST_SCALES = tuple(round(0.78 + 0.01 * i, 2) for i in range(11))   # list text / title
 LIST_MATCH = 0.75                         # a row scoring this is a candidate
-LIST_WIDTH_TOL = 5                        # ref px the two text widths may differ
+LIST_NAME_GAP = 9                         # ref px after a name's end that must be blank
+                                          # (letters ~4 px apart; seals 13+ px away)
 TEXT_INK = 90                             # grey level below which a pixel is text
 LIST_UP_BUTTON, LIST_DOWN_BUTTON = (1945, 260), (1942, 1113)
 LIST_SCROLLS = 40                         # arrow presses at most (stops when it stops)
 MAX_LOSSES = 3                            # games lost in a row before the bot stops
+# Filling up (--fill): "Potions Maxed Out ... Continue anyway?" means you
+# hold the most of that potion; "No" declines and the bot moves on.
+MAXED_NO_BUTTON = (1752, 763)
+LIST_ROW_MIN_H = 14                       # ref px: shorter ink bands aren't names
+LIST_ROW_GAP = 4                          # ref px of blank that splits two rows
+LIST_NAME_LEFT = 150                      # ref px at the left of a row checked for dark text
+LIST_NAME_MIN_INK = 300                   # dark pixels there for a brewable name
+NAME_MATCH = 0.9                          # two list names this alike are the same
 UNKNOWN = ("?", 0)                       # a piece that couldn't be read
 # Everything the reader looks at (board, hand row, next pair, recipe and its
 # check marks), captured once per look instead of once per cell.
@@ -381,9 +390,9 @@ class PotionTable:
         g = grey(rgb)
         # Text pixels: dark and unsaturated (the red "New!" seals are dark too).
         text = (g < TEXT_INK) & (rgb.max(axis=2) - rgb.min(axis=2) < 70)
-        ink = np.nonzero((title < TEXT_INK).any(axis=0))[0]
-        title_w = ink.max() - ink.min() + 1
+        ink_end = np.nonzero((title < TEXT_INK).any(axis=0))[0].max() + 1
         area = g.astype(np.float32)
+        s = self.win.scale
         best = None                          # (score, centre y in the grab)
         for k in LIST_SCALES:
             t = cv2.resize(title, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
@@ -391,18 +400,72 @@ class PotionTable:
                 continue
             scores = cv2.matchTemplate(area, t.astype(np.float32), cv2.TM_CCOEFF_NORMED)
             rows = scores.max(axis=1)
-            half = t.shape[0] // 2
+            h = t.shape[0]
             for top in np.nonzero(rows >= LIST_MATCH)[0]:
-                cols = np.nonzero(text[top:top + t.shape[0]].any(axis=0))[0]
-                if not len(cols):
+                # The name must end where the title ends: ink in its last
+                # letter, none just after (where "Swift Foot I" would go on
+                # to "II"). A "New!" seal sits further right.
+                end = int(scores[top].argmax()) + round(ink_end * k)
+                band = text[top + h // 4:top + 3 * h // 4]
+                if not band[:, max(0, end - round(5 * s)):end].any():
                     continue
-                if abs((cols.max() - cols.min() + 1) - title_w * k) > LIST_WIDTH_TOL * self.win.scale:
+                if band[:, end + round(2 * s):end + round(LIST_NAME_GAP * s)].any():
                     continue
                 if best is None or rows[top] > best[0]:
-                    best = (float(rows[top]), top + half)
+                    best = (float(rows[top]), top + h // 2)
         if best is None:
             return None
         return LIST_TEXT_REGION[1] + best[1] / self.win.scale
+
+    def list_rows(self):
+        """The recipes on the visible page of the list that can be brewed,
+        top first, as [(ref y of the row, name image)]. Greyed-out names
+        (locked, or for another island) are too light to count, and a row
+        cut off by the page edge is left for the next page."""
+        s = self.win.scale
+        rgb = self.win.grab(*LIST_TEXT_REGION).astype(int)
+        g = grey(rgb)
+        text = (g < TEXT_INK) & (rgb.max(axis=2) - rgb.min(axis=2) < 70)
+        ink_per_line = text.sum(axis=1)
+        on = ink_per_line >= 3                  # stray dark pixels of greyed names don't count
+        bands, start, gap = [], None, 0
+        for y, ink in enumerate(on):
+            if ink:
+                start = y if start is None else start
+                gap = 0
+            elif start is not None:
+                gap += 1
+                if gap >= LIST_ROW_GAP * s:
+                    bands.append((start, y - gap + 1))
+                    start, gap = None, 0
+        if start is not None:
+            bands.append((start, len(on)))      # runs off the bottom: cut off
+        # Descenders can touch the next row's capitals: split a band taller
+        # than a row at its thinnest line.
+        split = []
+        while bands:
+            top, bottom = bands.pop(0)
+            if bottom - top > 1.4 * LIST_PITCH * s:
+                lo, hi = top + round(0.5 * LIST_PITCH * s), top + round(1.2 * LIST_PITCH * s)
+                cut = lo + int(np.argmin(ink_per_line[lo:min(hi, bottom)]))
+                bands[:0] = [(top, cut), (cut + 1, bottom)]
+            else:
+                split.append((top, bottom))
+        bands = split
+        rows = []
+        for top, bottom in bands:
+            if bottom - top < LIST_ROW_MIN_H * s or top == 0 or bottom >= len(on):
+                continue
+            # Names are left-aligned and the red "New!" seals sit well to the
+            # right, so a brewable (dark) name shows at the left: live, 800+
+            # dark pixels there for every dark name, 0 for greyed ones.
+            if text[top:bottom, :round(LIST_NAME_LEFT * s)].sum() < LIST_NAME_MIN_INK * s * s:
+                continue
+            cols = np.nonzero(text[top:bottom].any(axis=0))[0]
+            name = np.ascontiguousarray(g[max(0, top - 3):bottom + 3,
+                                          max(0, cols.min() - 3):cols.max() + 4])
+            rows.append((LIST_TEXT_REGION[1] + (top + bottom) / 2 / s, name))
+        return rows
 
     def game_over(self):
         """True while the "Game Over" (out of space) dialog is up."""
@@ -872,10 +935,23 @@ def brew_loop(win, once=False, any_tier=False, max_brews=0):
     log.info("Done: %d potion(s) brewed.", made)
 
 
-def start_next(win):
-    """Press "Brew Again" and wait for the next board. When the potion
-    inventory is full the game asks "Continue anyway?"; like the old
-    potions.py, answer OK so brewing (and rep) carries on."""
+def answer_maxed(win, refuse):
+    """ "Potions Maxed Out ... Continue anyway?" is up: say No (``refuse``,
+    when filling up: live, No goes back to where the potion was started
+    from, the list or the Congratulations dialog) or OK (keep brewing for
+    the rep, like the old potions.py)."""
+    if refuse:
+        log.info("This potion is full (maxed out); not brewing more of it.")
+        win.press(*MAXED_NO_BUTTON)
+    else:
+        log.info("Potion inventory is full; brewing anyway (OK).")
+        win.press(*MAXED_OK_BUTTON)
+    win.park_mouse()
+
+
+def start_next(win, refuse_maxed=False):
+    """Press "Brew Again" and wait for the next board: True once it's up,
+    "full" if the potion is maxed out and ``refuse_maxed``, else False."""
     t = PotionTable(win)
     win.press(*BREW_AGAIN_BUTTON)
     win.park_mouse()
@@ -886,9 +962,9 @@ def start_next(win):
         wait(0.3)
         win.refresh()
         if t.maxed_out():
-            log.info("Potion inventory is full; brewing anyway (OK).")
-            win.press(*MAXED_OK_BUTTON)
-            win.park_mouse()
+            answer_maxed(win, refuse_maxed)
+            if refuse_maxed:
+                return "full"
             continue
         if t.read_hand():
             return True
@@ -927,7 +1003,7 @@ def to_recipe_list(win, timeout=10.0):
         elif t.switch_confirm():
             win.press(*SWITCH_OK_BUTTON)
         elif t.maxed_out():
-            win.press(*MAXED_OK_BUTTON)
+            win.press(*MAXED_NO_BUTTON)      # not starting anything: No
         elif t.read_hand():
             win.press(*SWITCH_RECIPE_BUTTON)
         win.park_mouse()
@@ -949,9 +1025,11 @@ def open_recipe(win, row, timeout=10.0):
     return False
 
 
-def wait_for_board(win, timeout=10.0):
+def wait_for_board(win, timeout=10.0, refuse_maxed=False):
     """After a recipe is clicked in the list: True once its board has a
-    pair in hand (answering "Continue anyway?" if the inventory is full)."""
+    pair in hand, False if it never shows. Live, a maxed-out potion asks
+    "Continue anyway?" over the list: OK, or with ``refuse_maxed`` No and
+    "full" is returned."""
     t = PotionTable(win)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -959,9 +1037,9 @@ def wait_for_board(win, timeout=10.0):
         wait(0.3)
         win.refresh()
         if t.maxed_out():
-            log.info("Potion inventory is full; brewing anyway (OK).")
-            win.press(*MAXED_OK_BUTTON)
-            win.park_mouse()
+            answer_maxed(win, refuse_maxed)
+            if refuse_maxed:
+                return "full"
             continue
         if t.read_hand():
             return True
@@ -984,23 +1062,32 @@ def scroll_list(win, button):
     return float(np.abs(list_page(win) - before).mean()) > 2
 
 
-def reopen_recipe(win, title):
-    """Go back to the recipe list and open the recipe named by ``title``
-    (PotionTable.recipe_title), scrolling the list to find it."""
+def list_from_top(win):
+    """Go to the recipe list, scrolled to the top; False if it won't show."""
     if not to_recipe_list(win):
         log.warning("Couldn't get to the recipe list")
         return False
-    t = PotionTable(win)
-    for _ in range(LIST_SCROLLS):                  # to the top first
+    for _ in range(LIST_SCROLLS):
         if not scroll_list(win, LIST_UP_BUTTON):
             break
+    return True
+
+
+def reopen_recipe(win, title, refuse_maxed=False):
+    """Go back to the recipe list and open the recipe named by ``title``
+    (PotionTable.recipe_title), scrolling the list to find it. True once
+    its board is up ("full" if it's maxed out and ``refuse_maxed``)."""
+    if not list_from_top(win):
+        return False
+    t = PotionTable(win)
     for _ in range(LIST_SCROLLS):
         y = t.find_in_list(title)
         if y is not None:
             win.press(LIST_X, round(y))
             win.park_mouse()
-            if wait_for_board(win):
-                return True
+            opened = wait_for_board(win, refuse_maxed=refuse_maxed)
+            if opened:
+                return opened
             log.warning("The recipe was found in the list but didn't open.")
             break
         if not scroll_list(win, LIST_DOWN_BUTTON):
@@ -1008,6 +1095,109 @@ def reopen_recipe(win, title):
             break
     snapshots.save(win, "recipe_not_reopened", "potions", force=True)
     return False
+
+
+# -- filling every potion up (--fill) ---------------------------------------------
+def same_name(a, b):
+    """Are two name images from the recipe list (PotionTable.list_rows) the
+    same recipe? Both come from the same list at the same size."""
+    if abs(a.shape[0] - b.shape[0]) > 4 or abs(a.shape[1] - b.shape[1]) > 4:
+        return False
+    b = cv2.resize(b, (a.shape[1], a.shape[0]), interpolation=cv2.INTER_AREA)
+    score = cv2.matchTemplate(a.astype(np.float32), b.astype(np.float32), cv2.TM_CCOEFF_NORMED)
+    return float(score.max()) >= NAME_MATCH
+
+
+def next_recipe(win, skip):
+    """From the top of the list, the first brewable recipe not in ``skip``
+    (name images), as (ref y on the page now showing, name), or None."""
+    if not list_from_top(win):
+        return None
+    t = PotionTable(win)
+    for _ in range(LIST_SCROLLS):
+        for y, name in t.list_rows():
+            if not any(same_name(name, s) for s in skip):
+                return y, name
+        if not scroll_list(win, LIST_DOWN_BUTTON):
+            return None
+    return None
+
+
+def brew_until_full(win, any_tier=False, before=0):
+    """Brew the open recipe again and again until the game says the potion
+    is maxed out. Returns (why it stopped, potions brewed): "full",
+    "too hard", "lost" (MAX_LOSSES in a row) or "stuck". ``before``: potions
+    brewed earlier this run, for the running total the overlay shows."""
+    made = losses = 0
+    while True:
+        brewer = Brewer(win, any_tier)
+        brewer.play()
+        if brewer.result == "brewed":
+            made, losses = made + 1, 0
+            log.info("Brewed %d so far.", before + made)
+            nxt = start_next(win, refuse_maxed=True)
+            if nxt == "full":
+                return "full", made
+            if not nxt:
+                return "stuck", made
+        elif brewer.lost:
+            losses += 1
+            if losses >= MAX_LOSSES:
+                return "lost", made
+            log.info("Lost this one; starting the same recipe again (%d lost in a row).", losses)
+            reopened = (brewer.title is not None
+                        and reopen_recipe(win, brewer.title, refuse_maxed=True))
+            if reopened == "full":
+                return "full", made
+            if not reopened:
+                return "stuck", made
+        elif brewer.result == "too hard":
+            return "too hard", made
+        else:
+            return "stuck", made
+
+
+def fill_potions(win, any_tier=False):
+    """Brew every recipe in the list, top to bottom, until the game says
+    each potion is maxed out ("No" to "Continue anyway?"), skipping greyed
+    out ones and those the plan says it would lose. Once nothing is left,
+    brew the first brewable recipe until stopped (OK to "Continue anyway?",
+    for the rep)."""
+    full, cant = [], []                   # list names: maxed out / not brewable here
+    made = 0
+    while True:
+        check_stop()
+        found = next_recipe(win, full + cant)
+        if found is None:
+            break
+        y, name = found
+        win.press(LIST_X, round(y))
+        win.park_mouse()
+        opened = wait_for_board(win, refuse_maxed=True)
+        if opened == "full":
+            full.append(name)
+            continue
+        if not opened:
+            log.warning("A recipe didn't open; skipping it.")
+            snapshots.save(win, "fill_not_opened", "potions", force=True)
+            cant.append(name)
+            continue
+        why, n = brew_until_full(win, any_tier, before=made)
+        made += n
+        log.info("Done with this recipe (%s, %d brewed); on to the next.", why, n)
+        (full if why == "full" else cant).append(name)
+    log.info("Filled up: %d maxed out, %d not brewable here, %d brewed this run. Brewing the "
+             "first recipe until stopped.", len(full), len(cant), made)
+    found = next_recipe(win, cant)
+    if found is None:
+        log.warning("No brewable recipe in the list; stopping.")
+        return
+    win.press(LIST_X, round(found[0]))
+    win.park_mouse()
+    if wait_for_board(win):
+        brew_loop(win, any_tier=any_tier)
+    else:
+        log.warning("The first recipe didn't open; stopping.")
 
 
 def brew_recipes(win, recipes, count=1, any_tier=False):
@@ -1050,6 +1240,9 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Play the potion-brewing table.")
     parser.add_argument("--once", action="store_true", help="stop after one potion")
+    parser.add_argument("--fill", action="store_true",
+                        help="brew every recipe in the list until each potion is maxed "
+                        "out, then brew the first one until stopped")
     parser.add_argument("--recipes", help="comma-separated recipe names or list rows to "
                         "brew in turn, e.g. \"Deadeye I, Boom Brew I\" or 7,8")
     parser.add_argument("--count", type=int, default=1, help="potions of each recipe (with --recipes)")
@@ -1072,7 +1265,9 @@ def main():
         sys.exit(1)
     with live_session(hotkeys=session_hotkeys(), debug=args.debug,
                       max_minutes=args.max_minutes):
-        if recipes:
+        if args.fill:
+            fill_potions(GameWindow(), any_tier=args.any_tier)
+        elif recipes:
             brew_recipes(GameWindow(), recipes, args.count, args.any_tier)
         else:
             brew_loop(GameWindow(), once=args.once, any_tier=args.any_tier,

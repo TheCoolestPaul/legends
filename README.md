@@ -34,7 +34,15 @@ Default hotkeys (rebind them in the panel's settings):
 | F8 | start / stop the potion bot |
 | `` ` `` | stop a running bot (the bots' own kill switch) |
 
-F9 is reserved for saving a debug frame. Each bot runs as its own process, using `.venv` if there is one. Only one bot runs at a time, since both drive the same game window, so starting one stops the other first. The panel shows each bot's last log line and its ship or brew count. Settings (input mode, time limit, ship/brew limits, recipes, `--record`/`--debug`) apply on the next start and are saved to `overlay/settings.json` (git-ignored). Closing the panel stops any running bot, and terminates it if it hasn't exited a few seconds later.
+F9 is reserved for saving a debug frame. Each bot runs as its own process, using `.venv` if there is one. Only one bot runs at a time, since both drive the same game window, so starting one stops the other first. The panel shows each bot's last log line and its ship or brew count. Settings (input mode, time limit, ship/brew limits, recipes, `--record`/`--debug`) apply on the next start and are saved to `overlay/settings.json` (git-ignored). Closing the panel stops any running bot, and terminates it if it hasn't exited a few seconds later. Every bot run's output is also saved to `logs/<bot>-<date>-<time>.log` (git-ignored, kept 14 days).
+
+### Filling up every potion
+Tick **Fill up all potions** in the panel's Potions settings (or run `.venv\Scripts\python potions\brew_bot.py --fill`) and start the potion bot from the potion table. It works down the recipe list from the top:
+
+- Each recipe is brewed again and again until the game says you hold the most of that potion ("Potions Maxed Out ... Continue anyway?"); the bot answers **No** and moves to the next recipe.
+- Greyed-out recipes (locked, or for another island) are skipped, and so are recipes the planner expects to lose often (tick **Any tier** to play them anyway) and ones lost three times in a row.
+- A lost game starts the same recipe again: the bot finds it in the list by its name.
+- Once every recipe is full or skipped, it brews the first recipe in the list until stopped, answering **OK** to keep going for the reputation.
 
 ## Repair bots
 Open the repair screen on a ship, then run:

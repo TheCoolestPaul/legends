@@ -366,3 +366,9 @@ def test_the_bots_output_is_written_to_its_log(tmp_path):
     assert path.read_text(encoding="utf-8") == "12:00:00 INFO one\n12:00:01 WARNING two\n"
     assert [out.get_nowait() for _ in range(3)] == ["12:00:00 INFO one",
                                                      "12:00:01 WARNING two", None]
+
+
+def test_potions_fill_command():
+    cmd = runner.build_command("potions", opts(potions__fill=True, potions__recipes="Deadeye I",
+                                               potions__any_tier=True), python="py")
+    assert cmd[3:] == ["--fill", "--any-tier"]                 # fill wins over recipes

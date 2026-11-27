@@ -868,3 +868,72 @@ def test_the_bot_stops_after_losing_too_many_in_a_row(monkeypatch):
     monkeypatch.setattr(brew_bot, "reopen_recipe", lambda win, title: reopened.append(1) or True)
     brew_bot.brew_loop(table("board_start").win)
     assert len(reopened) == brew_bot.MAX_LOSSES - 1
+
+
+# -- filling every potion up -----------------------------------------------------------
+def test_the_list_shows_which_recipes_can_be_brewed():
+    """Greyed-out names (locked, other island) are skipped, red "New!" seals
+    don't count as text, and a name cut off at the bottom waits for the next page."""
+    from brew_bot import LIST_PITCH, LIST_Y0
+    rows = [round((y - LIST_Y0) / LIST_PITCH) for y, _ in table("recipe_list").list_rows()]
+    assert rows == [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21]
+    # Live, another island, scrolled down two rows: Flatulent Fizz, Deadeye,
+    # Ghastly Visage and Shrinkin' Grog (with a seal) are greyed out there.
+    assert len(table("recipe_list_scrolled").list_rows()) == 15
+
+
+def test_list_names_match_across_scroll_positions():
+    from brew_bot import same_name
+    top = table("recipe_list").list_rows()            # Cannoneer Draft I is the 3rd row
+    scrolled = table("recipe_list_scrolled").list_rows()   # ... and the 1st here
+    assert same_name(top[2][1], scrolled[0][1])
+    assert not same_name(top[0][1], scrolled[0][1])   # Marksman Draught I
+    assert not same_name(top[3][1], scrolled[0][1])   # Mystic Mixture I
+
+
+def test_fill_moves_on_from_full_recipes_and_ends_on_the_first(monkeypatch):
+    import brew_bot
+    names = ["a", "b", "c"]
+    opened, brewed = [], []
+
+    def next_recipe(win, skip):
+        left = [n for n in names if n not in skip]
+        return (100 + names.index(left[0]), left[0]) if left else None
+
+    def wait_for_board(win, timeout=10.0, refuse_maxed=False):
+        name = names[opened[-1] - 100] if opened else None
+        if not refuse_maxed:
+            return True
+        return "full" if name == "a" else True        # "a" was already maxed out
+
+    def until_full(win, any_tier=False, before=0):
+        name = names[opened[-1] - 100]
+        return ("too hard", 0) if name == "c" else ("full", 4)
+
+    win = table("recipe_list").win
+    monkeypatch.setattr(win, "press", lambda x, y: opened.append(y))
+    monkeypatch.setattr(brew_bot, "same_name", lambda a, b: a == b)
+    monkeypatch.setattr(brew_bot, "next_recipe", next_recipe)
+    monkeypatch.setattr(brew_bot, "wait_for_board", wait_for_board)
+    monkeypatch.setattr(brew_bot, "brew_until_full", until_full)
+    monkeypatch.setattr(brew_bot, "brew_loop", lambda win, any_tier=False: brewed.append("loop"))
+    brew_bot.fill_potions(win)
+    # a: full on opening; b: brewed until full; c: too hard; then the first
+    # brewable one ("a", full but brewable) for good.
+    assert opened == [100, 101, 102, 100] and brewed == ["loop"]
+
+
+def test_brewing_until_full_stops_when_the_game_says_maxed_out(monkeypatch):
+    import brew_bot
+    nexts = iter([True, True, "full"])
+
+    class Win:
+        def __init__(self, win, any_tier=False):
+            self.result, self.end, self.title = "brewed", None, None
+        lost = brew_bot.Brewer.lost
+
+        def play(self):
+            pass
+    monkeypatch.setattr(brew_bot, "Brewer", Win)
+    monkeypatch.setattr(brew_bot, "start_next", lambda win, refuse_maxed=False: next(nexts))
+    assert brew_bot.brew_until_full(None) == ("full", 3)
