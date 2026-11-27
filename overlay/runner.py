@@ -31,6 +31,27 @@ BOTS = {
                 "count": re.compile(r"Brewed (\d+) so far"), "unit": "brews"},
 }
 LOG_LINE = re.compile(r"^\d\d:\d\d:\d\d (DEBUG|INFO|WARNING|ERROR|CRITICAL) (.*)$")
+# Every run's output is also saved here (git-ignored), one file per run:
+# the panel only keeps the last few hundred lines in memory.
+LOG_DIR = REPO_ROOT / "logs"
+KEEP_LOGS_DAYS = 14
+
+
+def open_run_log(bot, folder=None, now=None):
+    """A new log file for one run of ``bot`` (older than KEEP_LOGS_DAYS are
+    deleted), or None if it can't be made."""
+    folder = Path(folder or LOG_DIR)
+    now = time.time() if now is None else now
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob("*.log"):
+            if now - old.stat().st_mtime > KEEP_LOGS_DAYS * 86400:
+                old.unlink()
+        name = "%s-%s.log" % (bot, time.strftime("%Y%m%d-%H%M%S", time.localtime(now)))
+        return open(folder / name, "a", encoding="utf-8")
+    except OSError:
+        log.exception("Couldn't open a log file for the %s bot", bot)
+        return None
 
 
 def python_exe(executable=sys.executable, venv=REPO_ROOT / ".venv" / "Scripts" / "python.exe"):
@@ -115,14 +136,25 @@ class BotProcess:
                                creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0)
         self.state = "running"
         self.status = "Starting..."
-        threading.Thread(target=self._read, args=(self.proc, self._queue),
+        threading.Thread(target=self._read, args=(self.proc, self._queue, open_run_log(self.bot)),
                          name="read-" + self.bot, daemon=True).start()
 
     @staticmethod
-    def _read(proc, out):
-        for line in proc.stdout:
-            out.put(line.rstrip("\r\n"))
-        out.put(None)
+    def _read(proc, out, logfile=None):
+        try:
+            for line in proc.stdout:
+                line = line.rstrip("\r\n")
+                if logfile is not None:
+                    try:
+                        logfile.write(line + "\n")
+                        logfile.flush()
+                    except (OSError, ValueError):
+                        logfile = None
+                out.put(line)
+        finally:
+            if logfile is not None:
+                logfile.close()
+            out.put(None)
 
     def stop(self):
         """Ask the bot to stop; it is terminated if it hasn't KILL_AFTER s later."""

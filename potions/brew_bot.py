@@ -71,6 +71,21 @@ RECIPES = [
     "Mystic Mixture II", "Swift Foot II", "Puke Potion", "Deadeye II", "Boom Brew II",
     "Lively Bucko Brew II",
 ]
+# Finding a recipe in the (scrolling) list again after a lost game: the
+# recipe's name above its slots is matched against the list's text (same
+# typeface, ~0.83 the size). Measured on the first page (Nov 2026): the
+# right row scores 0.88-0.94 and recipes not on the page at most 0.77;
+# "Swift Foot I" also matches "Swift Foot II" (0.94 vs 0.89), which the
+# width of the text settles (158 px: rows of 158 and 168).
+TITLE_REGION = (475, 273, 610, 48)        # the recipe's name on the board screen
+LIST_TEXT_REGION = (1440, 203, 470, 960)  # recipe names in the list
+LIST_SCALES = tuple(round(0.78 + 0.01 * i, 2) for i in range(11))   # list text / title
+LIST_MATCH = 0.75                         # a row scoring this is a candidate
+LIST_WIDTH_TOL = 5                        # ref px the two text widths may differ
+TEXT_INK = 90                             # grey level below which a pixel is text
+LIST_UP_BUTTON, LIST_DOWN_BUTTON = (1945, 260), (1942, 1113)
+LIST_SCROLLS = 40                         # arrow presses at most (stops when it stops)
+MAX_LOSSES = 3                            # games lost in a row before the bot stops
 UNKNOWN = ("?", 0)                       # a piece that couldn't be read
 # Everything the reader looks at (board, hand row, next pair, recipe and its
 # check marks), captured once per look instead of once per cell.
@@ -94,6 +109,8 @@ DROP_HOLD = 0.05                         # s the button is held to drop a pair
 # board unchanged) this long after the click, press again.
 DROP_CONFIRM = 1.0
 DROP_RETRIES = 2
+ROTATE_CONFIRM = 1.0                     # s for a rotate to show before pressing again
+ROTATE_RETRIES = 1
 PIECE_SCALE = 0.84                       # board pieces vs the ingredient chart
 INNER = (0.2, 0.8)                       # part of a chart hex compared (no corners)
 SEARCH = 8                               # ref px of slack around a cell centre
@@ -345,6 +362,48 @@ class PotionTable:
                                 self.win.scale)
         return score >= 0.8
 
+    def recipe_title(self):
+        """The recipe's name on the board screen as a trimmed grey image,
+        with a little blank parchment after it (so "Swift Foot I" doesn't
+        fit inside "Swift Foot II"), or None when there's no name."""
+        g = grey(self.win.grab(*TITLE_REGION))
+        ys, xs = np.nonzero(g < TEXT_INK)
+        if len(xs) < 20:
+            return None
+        pad = round(0.8 * (ys.max() - ys.min()))
+        return np.ascontiguousarray(g[max(0, ys.min() - 4):ys.max() + 5,
+                                      max(0, xs.min() - 4):xs.max() + pad])
+
+    def find_in_list(self, title):
+        """Ref y of the recipe list row showing ``title`` (from
+        recipe_title), or None if it isn't on the visible page."""
+        rgb = self.win.grab(*LIST_TEXT_REGION).astype(int)
+        g = grey(rgb)
+        # Text pixels: dark and unsaturated (the red "New!" seals are dark too).
+        text = (g < TEXT_INK) & (rgb.max(axis=2) - rgb.min(axis=2) < 70)
+        ink = np.nonzero((title < TEXT_INK).any(axis=0))[0]
+        title_w = ink.max() - ink.min() + 1
+        area = g.astype(np.float32)
+        best = None                          # (score, centre y in the grab)
+        for k in LIST_SCALES:
+            t = cv2.resize(title, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+            if t.shape[0] >= area.shape[0] or t.shape[1] >= area.shape[1]:
+                continue
+            scores = cv2.matchTemplate(area, t.astype(np.float32), cv2.TM_CCOEFF_NORMED)
+            rows = scores.max(axis=1)
+            half = t.shape[0] // 2
+            for top in np.nonzero(rows >= LIST_MATCH)[0]:
+                cols = np.nonzero(text[top:top + t.shape[0]].any(axis=0))[0]
+                if not len(cols):
+                    continue
+                if abs((cols.max() - cols.min() + 1) - title_w * k) > LIST_WIDTH_TOL * self.win.scale:
+                    continue
+                if best is None or rows[top] > best[0]:
+                    best = (float(rows[top]), top + half)
+        if best is None:
+            return None
+        return LIST_TEXT_REGION[1] + best[1] / self.win.scale
+
     def game_over(self):
         """True while the "Game Over" (out of space) dialog is up."""
         score, _ = match_marker(self.win.grab(*GAME_OVER_REGION), "potions/game_over.png",
@@ -379,16 +438,32 @@ class PotionTable:
             wait(0.02)
         return None
 
-    def rotate(self, hand):
-        """Swap the two pieces in hand; returns the new hand or None."""
+    def rotate(self, hand, on_press=None):
+        """Swap the two pieces in hand; returns the new hand or None.
+
+        Live (Nov 2026) about 1 right-click in 100 was lost: if the pair is
+        still in hand unswapped, press again. ``on_press(started, ok)`` is
+        called for each press (for the click log)."""
         left, right, c = hand
-        self.win.right_click(aim_x(c), AIM_Y)
-        deadline = time.monotonic() + 1.5
-        while time.monotonic() < deadline:
-            self.look()
-            if self.hand_is((right, left), c):
-                return right, left, c
-            wait(0.02)
+        for attempt in range(ROTATE_RETRIES + 1):
+            started = time.monotonic()
+            self.win.right_click(aim_x(c), AIM_Y)
+            deadline = started + ROTATE_CONFIRM
+            while True:
+                self.look()
+                if self.hand_is((right, left), c):
+                    if on_press:
+                        on_press(started, True)
+                    return right, left, c
+                if time.monotonic() >= deadline:
+                    break
+                wait(0.02)
+            if on_press:
+                on_press(started, False)
+            # Only press again if nothing else happened (else it could swap back).
+            if attempt == ROTATE_RETRIES or not self.hand_is((left, right), c):
+                return None
+            log.warning("The rotate on columns %d-%d didn't take; pressing again", c, c + 1)
         return None
 
     def drop(self, c):
@@ -477,6 +552,10 @@ class PotionTable:
 LETTERS = {colour: code for code, colour in CODES.items()}   # gray is k: green is g
 
 
+def grey(img):
+    return cv2.cvtColor(np.ascontiguousarray(img, dtype=np.uint8), cv2.COLOR_RGB2GRAY)
+
+
 def describe(cols):
     """Short text of a board: each column bottom first, e.g. 'g1,b2 | - | ...'
     (letters as in brewing.CODES)."""
@@ -501,6 +580,12 @@ class Brewer:
         self.replan = None                  # background re-plan: {"pool", "result"/"error"}
         self.game = None                    # gamelog.GameLog of the game being played
         self.end = None                     # why play stopped, when not brewed/lost
+        self.title = None                   # the recipe's name (image), to find it again
+
+    @property
+    def lost(self):
+        """The game can't be won: Game Over, or no room left for the pair."""
+        return self.result == "lost" or self.end == "no room"
 
     def choose_plan(self, needs):
         """Pick a strategy for this recipe from a simulated plan (planner.py)
@@ -602,6 +687,7 @@ class Brewer:
             log.warning("No potion board on screen; nothing to do.")
             self.result = "no table"
             return
+        self.title = t.recipe_title()
         if not self.choose_plan(needs):
             self.result = "too hard"
             return
@@ -661,10 +747,9 @@ class Brewer:
                 continue
             lost = 0
             if (held[0], held[1]) != want:
-                tr = time.monotonic()
-                held = t.rotate(held)
+                held = t.rotate(held, on_press=lambda started, ok:
+                                self.note_click("rotate", started, ok))
                 rotated = held is not None and (held[0], held[1]) == want
-                self.note_click("rotate", tr, rotated)
                 if not rotated:
                     log.warning("Rotate didn't take; re-reading")
                     cols, hand = t.wait_settled()
@@ -753,12 +838,25 @@ def brew_loop(win, once=False, any_tier=False, max_brews=0):
         if not start_next(win):
             log.warning("Couldn't start a potion from the finished-potion dialog.")
             return
+    losses = 0
     while True:
         brewer = Brewer(win, any_tier)
         began = time.monotonic()
         brewer.play()
+        if brewer.lost and not once:
+            # Live (Nov 2026): one lost game ended a whole unattended run.
+            losses += 1
+            if losses >= MAX_LOSSES:
+                log.warning("Lost %d games in a row; stopping.", losses)
+                break
+            log.info("Lost this one; starting the same recipe again (%d lost in a row).",
+                     losses)
+            if brewer.title is None or not reopen_recipe(win, brewer.title):
+                break
+            continue
         if brewer.result != "brewed":
             break
+        losses = 0
         made += 1
         log.info("Brewed %d so far (this one %.0fs, average %.0fs).", made,
                  time.monotonic() - began, (time.monotonic() - started) / made)
@@ -842,9 +940,19 @@ def open_recipe(win, row, timeout=10.0):
     if not to_recipe_list(win):
         log.warning("Couldn't get to the recipe list")
         return False
-    t = PotionTable(win)
     win.press(LIST_X, round(LIST_Y0 + row * LIST_PITCH))
     win.park_mouse()
+    if wait_for_board(win, timeout):
+        return True
+    log.warning("Recipe row %d didn't open (locked, or the list moved?)", row)
+    snapshots.save(win, "recipe_not_opened", "potions", force=True, info={"row": row})
+    return False
+
+
+def wait_for_board(win, timeout=10.0):
+    """After a recipe is clicked in the list: True once its board has a
+    pair in hand (answering "Continue anyway?" if the inventory is full)."""
+    t = PotionTable(win)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         check_stop()
@@ -857,8 +965,48 @@ def open_recipe(win, row, timeout=10.0):
             continue
         if t.read_hand():
             return True
-    log.warning("Recipe row %d didn't open (locked, or the list moved?)", row)
-    snapshots.save(win, "recipe_not_opened", "potions", force=True, info={"row": row})
+    return False
+
+
+def list_page(win):
+    """A small grey thumbnail of the visible list, to see whether it scrolled."""
+    return cv2.resize(grey(win.grab(*LIST_TEXT_REGION)), (60, 120),
+                      interpolation=cv2.INTER_AREA).astype(int)
+
+
+def scroll_list(win, button):
+    """Press a list arrow; True if the list moved."""
+    before = list_page(win)
+    win.press(*button)
+    win.park_mouse()
+    wait(0.5)
+    win.refresh()
+    return float(np.abs(list_page(win) - before).mean()) > 2
+
+
+def reopen_recipe(win, title):
+    """Go back to the recipe list and open the recipe named by ``title``
+    (PotionTable.recipe_title), scrolling the list to find it."""
+    if not to_recipe_list(win):
+        log.warning("Couldn't get to the recipe list")
+        return False
+    t = PotionTable(win)
+    for _ in range(LIST_SCROLLS):                  # to the top first
+        if not scroll_list(win, LIST_UP_BUTTON):
+            break
+    for _ in range(LIST_SCROLLS):
+        y = t.find_in_list(title)
+        if y is not None:
+            win.press(LIST_X, round(y))
+            win.park_mouse()
+            if wait_for_board(win):
+                return True
+            log.warning("The recipe was found in the list but didn't open.")
+            break
+        if not scroll_list(win, LIST_DOWN_BUTTON):
+            log.warning("Couldn't find the recipe in the list to start it again.")
+            break
+    snapshots.save(win, "recipe_not_reopened", "potions", force=True)
     return False
 
 
@@ -868,11 +1016,9 @@ def brew_recipes(win, recipes, count=1, any_tier=False):
     for recipe in recipes:
         row = recipe_row(recipe)
         name = RECIPES[row] if row < len(RECIPES) else "row %d" % row
-        for i in range(count):
-            if i == 0:
-                opened = open_recipe(win, row)
-            else:
-                opened = start_next(win)
+        made = losses = 0
+        opened = open_recipe(win, row)
+        while True:
             if not opened:
                 summary.append((name, "didn't open", 0, 0))
                 break
@@ -880,10 +1026,20 @@ def brew_recipes(win, recipes, count=1, any_tier=False):
             began = time.monotonic()
             brewer.play()
             took = time.monotonic() - began
-            summary.append((name, brewer.result or "stopped", round(took), brewer.turns))
-            log.info("%s: %s in %.0fs (%d turns, %d mismatches)", name,
-                     brewer.result or "stopped", took, brewer.turns, brewer.mismatches)
-            if brewer.result != "brewed":
+            outcome = brewer.result or brewer.end or "stopped"
+            summary.append((name, outcome, round(took), brewer.turns))
+            log.info("%s: %s in %.0fs (%d turns, %d mismatches)", name, outcome, took,
+                     brewer.turns, brewer.mismatches)
+            if brewer.result == "brewed":
+                made, losses = made + 1, 0
+                if made >= count:
+                    break
+                opened = start_next(win)
+            elif brewer.lost and losses + 1 < MAX_LOSSES:
+                losses += 1
+                log.info("Lost this one; opening %s again.", name)
+                opened = open_recipe(win, row)
+            else:
                 break
     lines = ["  %-26s %-12s %4ss %3s turns" % row for row in summary]
     log.info("Summary:%s", "".join("\n" + line for line in lines))

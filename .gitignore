@@ -24,3 +24,5 @@ potions/tune_state.json
 potions/tune_best.json
 # Live potion game logs (potions/gamelog.py)
 potions/game_logs/
+# Bot run logs (overlay/runner.py)
+logs/

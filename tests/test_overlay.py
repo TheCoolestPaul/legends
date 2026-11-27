@@ -12,6 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from overlay import hotkeys, runner, settings  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _run_logs_in_tmp(monkeypatch, tmp_path):
+    """Bots started in tests never write to the real logs/ folder."""
+    monkeypatch.setattr(runner, "LOG_DIR", tmp_path / "logs")
+
+
 # -- settings -----------------------------------------------------------------
 def test_missing_settings_file_gives_the_defaults(tmp_path):
     assert settings.load(tmp_path / "none.json") == settings.DEFAULTS
@@ -332,3 +338,31 @@ def test_quitting_kills_a_bot_that_wont_stop(panel):
 def test_quit_waits_longer_than_the_runner_kill_deadline():
     from overlay import app
     assert app.QUIT_TRIES * app.QUIT_POLL_MS / 1000 > runner.KILL_AFTER
+
+
+# -- run logs -----------------------------------------------------------------
+def test_each_run_gets_a_log_file_and_old_ones_are_cleared(tmp_path):
+    import os
+    folder = tmp_path / "runs"
+    folder.mkdir()
+    old = folder / "potions-20260101-000000.log"
+    old.write_text("old")
+    now = time.time()
+    os.utime(old, (now - 20 * 86400, now - 20 * 86400))
+    f = runner.open_run_log("repair", folder, now)
+    f.close()
+    assert not old.exists()
+    assert [p.name.split("-")[0] for p in folder.glob("*.log")] == ["repair"]
+
+
+def test_the_bots_output_is_written_to_its_log(tmp_path):
+    import queue
+
+    class Proc:
+        stdout = iter(["12:00:00 INFO one\n", "12:00:01 WARNING two\r\n"])
+    out = queue.Queue()
+    path = tmp_path / "run.log"
+    runner.BotProcess._read(Proc(), out, open(path, "a", encoding="utf-8"))
+    assert path.read_text(encoding="utf-8") == "12:00:00 INFO one\n12:00:01 WARNING two\n"
+    assert [out.get_nowait() for _ in range(3)] == ["12:00:00 INFO one",
+                                                     "12:00:01 WARNING two", None]

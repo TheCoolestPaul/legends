@@ -795,3 +795,76 @@ def test_gray_recipe_slots_with_unmade_icons_still_count():
     gray border) read as no slot, so the bot played for the three checked
     red/blue/green 3s and never built a Gold Gem."""
     assert table("addled_elixir").read_recipe() == Counter({("gray", 5): 2})
+
+
+# -- finding a recipe in the list again -----------------------------------------------
+def test_a_recipe_title_finds_its_row_in_the_list():
+    """Swift Foot I is row 4; Swift Foot II (row 17) matches its text almost as
+    well and must lose on width."""
+    from brew_bot import LIST_PITCH, LIST_Y0
+    lst = table("recipe_list")
+    y = lst.find_in_list(table("swift_foot_start").recipe_title())
+    assert y is not None and abs(y - (LIST_Y0 + 4 * LIST_PITCH)) < 30
+    y = lst.find_in_list(table("game_over").recipe_title())        # Swashbuckler Stew II
+    assert y is not None and abs(y - (LIST_Y0 + 13 * LIST_PITCH)) < 30
+
+
+def test_recipes_not_on_the_page_are_not_found():
+    lst = table("recipe_list")
+    for name in ("pantano_start", "addled_elixir", "pincer_start"):   # further down
+        assert lst.find_in_list(table(name).recipe_title()) is None, name
+
+
+def test_a_lost_rotate_is_pressed_again(monkeypatch):
+    import brew_bot
+    t = table("board_start")
+    presses, hands = [], iter([False, True])     # first press lost, second takes
+    monkeypatch.setattr(brew_bot, "ROTATE_CONFIRM", 0.0)
+    monkeypatch.setattr(t, "look", lambda: None)
+
+    def hand_is(pair, c):
+        return next(hands) if pair == (("red", 1), ("blue", 1)) else True
+    monkeypatch.setattr(t, "hand_is", hand_is)
+    got = t.rotate((("blue", 1), ("red", 1), 3),
+                   on_press=lambda started, ok: presses.append(ok))
+    assert got == (("red", 1), ("blue", 1), 3)
+    assert [a[0] for a in t.win.actions] == ["right", "right"] and presses == [False, True]
+
+
+def test_a_lost_game_reopens_the_recipe_and_carries_on(monkeypatch):
+    import brew_bot
+    results = iter([("lost", None), (None, "no room"), ("brewed", None), (None, None)])
+    reopened = []
+
+    class FakeBrewer:
+        def __init__(self, win, any_tier=False):
+            self.result, self.end = next(results)
+            self.title = "title"
+
+        lost = brew_bot.Brewer.lost
+
+        def play(self):
+            pass
+    monkeypatch.setattr(brew_bot, "Brewer", FakeBrewer)
+    monkeypatch.setattr(brew_bot, "reopen_recipe", lambda win, title: reopened.append(title)
+                        or True)
+    monkeypatch.setattr(brew_bot, "start_next", lambda win: True)
+    brew_bot.brew_loop(table("board_start").win)
+    assert reopened == ["title", "title"]        # after the loss and the full board
+
+
+def test_the_bot_stops_after_losing_too_many_in_a_row(monkeypatch):
+    import brew_bot
+
+    class Loser:
+        def __init__(self, win, any_tier=False):
+            self.result, self.end, self.title = "lost", None, "title"
+        lost = brew_bot.Brewer.lost
+
+        def play(self):
+            pass
+    reopened = []
+    monkeypatch.setattr(brew_bot, "Brewer", Loser)
+    monkeypatch.setattr(brew_bot, "reopen_recipe", lambda win, title: reopened.append(1) or True)
+    brew_bot.brew_loop(table("board_start").win)
+    assert len(reopened) == brew_bot.MAX_LOSSES - 1

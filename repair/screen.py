@@ -340,6 +340,10 @@ def live_session(hotkeys=None, debug=False, max_minutes=None):
     logging.basicConfig(level=logging.DEBUG if debug else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s",
                         datefmt="%H:%M:%S")
+    # --debug is for the bots' own messages; Pillow logs every PNG chunk it
+    # reads at DEBUG (live: hundreds of "STREAM b'IDAT'" lines per potion).
+    for noisy in ("PIL", "matplotlib"):
+        logging.getLogger(noisy).setLevel(logging.INFO)
     pyautogui.PAUSE = 0.01
     reset_stop()
     deadline = time.monotonic() + max_minutes * 60 if max_minutes else None
