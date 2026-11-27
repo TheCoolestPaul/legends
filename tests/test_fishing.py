@@ -164,7 +164,8 @@ def test_a_falling_bar_is_not_set(monkeypatch):
 def test_the_fishing_game_is_told_from_the_open_world():
     """Live: the session had ended and the character was swimming off the
     dock; the bot clicked twice before giving up. It now checks first."""
-    for name in ("idle", "line_full", "caught", "loot", "shark_fight"):
+    for name in ("idle", "idle_day", "line_full", "caught", "loot", "shark_fight", "bite",
+                 "trash_confirm", "caught_orange_line"):
         assert table(name).fishing(), name
     assert not table("not_fishing").fishing()
 
@@ -252,3 +253,40 @@ def test_a_dyed_item_is_binned_anyway(monkeypatch):
     monkeypatch.setattr(fish_bot, "wait", lambda s: None)
     fisher.answer_confirm()
     assert presses == [fish_bot.CONFIRM_YES]
+
+
+@pytest.mark.parametrize("sea", [
+    (15, 20, 35),      # night
+    (60, 140, 130),    # teal (live, dawn)
+    (30, 220, 90),     # sharp green
+    (170, 255, 80),    # lime
+    (205, 235, 95),    # yellow-green
+    (235, 242, 242),   # white foam / bright sky
+    (245, 165, 60),    # sunset orange
+    (120, 200, 230),   # pale blue
+])
+def test_the_fishing_label_is_found_over_any_sea(sea):
+    """The "Fishing" letters have no panel behind them (live: a plain match
+    failed at dawn); the user asked about a sharp green sea too. Paint the
+    real letter shapes over each sea colour: found with the letters, never
+    on the sea alone."""
+    from screen import load_marker
+    tpl = load_marker("fishing/fishing_label.png").astype(float)
+    alpha = np.clip((tpl - 60) / 160, 0, 1)[..., None]
+    region = np.zeros((119, 700, 3)) + np.array(sea, float)
+    patch = region[30:30 + tpl.shape[0], 95:95 + tpl.shape[1]]
+    region[30:30 + tpl.shape[0], 95:95 + tpl.shape[1]] = (
+        patch * (1 - alpha) + np.array([229, 220, 187]) * alpha)
+    with_letters = region.astype(np.uint8)
+    sea_only = (np.zeros((119, 700, 3)) + np.array(sea)).astype(np.uint8)
+
+    def found(img):
+        return fish_bot.label_found(img, 1.0)
+    assert found(with_letters)
+    assert not found(sea_only)
+
+
+def test_a_sea_the_colour_of_the_letters_is_not_the_label():
+    """Lettering you can't see isn't there: a cream-coloured region alone."""
+    cream = (np.zeros((119, 700, 3)) + np.array([229, 220, 187])).astype(np.uint8)
+    assert not fish_bot.label_found(cream, 1.0)

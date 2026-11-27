@@ -14,6 +14,7 @@ Pull Fish (2) while it's healthy. On a catch: OK on "Congratulations",
 Everything was measured from a recorded session (Nov 2026, 2560x1369 game
 area; debug_frames/fishing_research/20261127-002202) and live tests.
 """
+import functools
 import logging
 import sys
 import time
@@ -28,7 +29,7 @@ sys.path.insert(0, str(HERE.parent / "repair"))  # shared screen code
 import snapshots  # noqa: E402
 from repair_mini_game import session_hotkeys  # noqa: E402
 from screen import (REPO_ROOT, GameWindow, check_stop, live_session,  # noqa: E402
-                    match_marker, wait)
+                    load_marker, match_marker, wait)
 
 log = logging.getLogger("repair")
 
@@ -63,6 +64,8 @@ MARKER_MATCH = 0.8
 # gone in the open world (0.30; live, the session had ended and the
 # character was swimming off the dock).
 FISHING_LABEL_REGION = (900, 1273, 700, 119)
+LABEL_COVER = 0.75       # share of the letters' core that must be cream
+LABEL_NOISE = 0.25       # most of the area clear of the letters that may be
 # Clicks go over open water: live, a press near the dock's rowboat started
 # no cast.
 CAST_POINT = (1284, 798)
@@ -191,6 +194,48 @@ def find_mark(img, colour, scale=1.0):
     return None
 
 
+def label_letters(img):
+    """0/255 mask of the "Fishing" label's cream letters in an RGB image.
+    Measured day and night: about (229, 220, 187), red >= green >= blue,
+    red ~40 above blue. The band is narrow so a bright sea (sharp green,
+    lime, foam, sunset) behind the label isn't taken for lettering."""
+    a = img.astype(np.int16)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    cream = ((r >= 195) & (g >= 185) & (b >= 145) & (b <= 225)
+             & (r - b >= 15) & (r - b <= 80) & (np.abs(r - g) <= 30))
+    return (cream * 255).astype(np.uint8)
+
+
+@functools.lru_cache(maxsize=8)
+def label_shape(scale):
+    """The "Fishing" label at ``scale``: (letter core, area well clear of
+    the letters), as 0/1 float masks."""
+    tpl = load_marker("fishing/fishing_label.png")
+    if abs(scale - 1.0) > 1e-3:
+        tpl = cv2.resize(tpl, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    core = tpl > 195                                # the letters' solid middle
+    near = cv2.dilate(core.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+    return core.astype(np.float32), (~near).astype(np.float32)
+
+
+def label_found(img, scale=1.0):
+    """Is the "Fishing" label in this RGB image? Scored as how much of the
+    letters' core is cream (their soft edges, blended with a bright sea,
+    may be cream too: that only fattens them) and how little of the area
+    clear of the letters is (a cream sea alone isn't lettering).
+    Measured: 0.92-0.98 of the core in every fishing frame, 1.0 painted
+    over night, teal, sharp green, lime, foam and sunset seas; 0.03 in
+    the open world."""
+    core, far = label_shape(round(scale, 3))
+    letters = (label_letters(img) > 0).astype(np.float32)
+    if letters.shape[0] < core.shape[0] or letters.shape[1] < core.shape[1]:
+        return False
+    cover = cv2.matchTemplate(letters, core, cv2.TM_CCORR) / core.sum()
+    noise = cv2.matchTemplate(letters, far, cv2.TM_CCORR) / far.sum()
+    best = np.unravel_index(np.argmax(cover - noise), cover.shape)
+    return bool(cover[best] >= LABEL_COVER and noise[best] <= LABEL_NOISE)
+
+
 class Table:
     """Reads the fishing screen from a GameWindow (live or a screenshot)."""
 
@@ -221,10 +266,11 @@ class Table:
         return score >= MARKER_MATCH
 
     def fishing(self):
-        """Is the fishing game up (not the open world)?"""
-        score, _ = match_marker(self.win.grab(*FISHING_LABEL_REGION), "fishing/fishing_label.png",
-                                self.win.scale)
-        return score >= MARKER_MATCH
+        """Is the fishing game up (not the open world)? The "Fishing" label
+        has no panel behind it (live, a plain match fell to 0.79 at dawn
+        with the sea behind it), so its letters are found by their cream
+        colour and shape (label_found)."""
+        return label_found(self.win.grab(*FISHING_LABEL_REGION), self.win.scale)
 
     def caught(self):
         score, _ = match_marker(self.win.grab(*CAUGHT_REGION), "fishing/you_caught.png",
