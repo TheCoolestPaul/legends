@@ -330,3 +330,27 @@ def test_a_bar_already_bouncing_is_only_set(monkeypatch):
     monkeypatch.setattr(fish_bot, "wait", lambda s: None)
     assert fisher.cast() is True
     assert fisher.win.actions == ["click"]          # just the one that sets it
+
+
+def test_sink_lure_is_used_whenever_ready_while_sinking(monkeypatch):
+    """The user: Sink Lure is often still cooling down right after a cast;
+    use it as soon as it's ready while the lure goes down."""
+    fisher = Fisher(FakeWin())
+    clock = [0.0]
+    monkeypatch.setattr(fish_bot.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(fish_bot, "wait", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(fisher.table, "mark", lambda colour: None)
+    monkeypatch.setattr(fisher.table, "gauge", lambda: fish_bot.Gauge("green", 1.0))
+    ready_at = [3.0]                              # cooling down for 3 s after the cast
+    monkeypatch.setattr(fisher.table, "ready",
+                        lambda skill: skill == "sink" and clock[0] >= ready_at[0])
+
+    def use(skill):
+        fisher.win.actions.append(skill)
+        ready_at[0] = clock[0] + 100              # used: cooling down again
+    monkeypatch.setattr(fisher, "use", use)
+    assert fisher.watch(10.0, 0.0, sink=True) is None
+    assert fisher.win.actions == ["sink"]
+    fisher.win.actions.clear()
+    assert fisher.watch(5.0, 0.0) is None         # working the lure up: never
+    assert fisher.win.actions == []

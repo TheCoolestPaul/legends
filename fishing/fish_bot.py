@@ -82,6 +82,8 @@ BAR_WAIT = 2.5           # s for the power bar to come up after the first click
 # front of them (the user, Nov 2026): rest on the bottom first (the best
 # fish), then work the lure up a step at a time, stalling at each depth.
 BOTTOM_WAIT = 60.0       # s on the bottom before working the lure up
+SINK_CHECK = 1.0         # s between Sink Lure readiness checks while sinking (not while
+                         # working the lure up: sinking it then would undo the climb)
 STEP_REEL = 0.6          # s of reeling per step up
 STEP_WAIT = 5.0          # s held (Stall Lure) at each depth
 # The fishing game ends itself after about a minute on the dock without a
@@ -429,11 +431,14 @@ class Fisher:
         log.warning("The lure didn't land (a stolen lure? re-equip one from Lures).")
         return False
 
-    def watch(self, seconds, since):
+    def watch(self, seconds, since, sink=False):
         """Watch the lure for ``seconds``: "bite" (green "!", hooked with a
-        click), "gone" (the lure is back on the dock) or None."""
+        click), "gone" (the lure is back on the dock) or None. With
+        ``sink``, use Sink Lure whenever it's ready (the user: it's often
+        still cooling down right after the cast, ready again soon after)."""
         t = self.table
         end = time.monotonic() + seconds
+        next_sink = time.monotonic()
         while time.monotonic() < end:
             check_stop()
             snapshots.take_requested(self.win, "fishing")
@@ -443,6 +448,10 @@ class Fisher:
                 return "bite"
             if not t.gauge().line:
                 return "gone"
+            if sink and time.monotonic() >= next_sink:
+                next_sink = time.monotonic() + SINK_CHECK
+                if t.ready("sink"):
+                    self.use("sink")
             wait(0.05)
         return None
 
@@ -474,9 +483,7 @@ class Fisher:
         lure is back on the dock without one."""
         t = self.table
         start = time.monotonic()
-        if t.ready("sink"):
-            self.use("sink")
-        found = self.watch(BOTTOM_WAIT, start)
+        found = self.watch(BOTTOM_WAIT, start, sink=True)
         if found == "bite":
             return True
         log.debug("nothing on the bottom; working the lure up")
