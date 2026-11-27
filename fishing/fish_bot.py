@@ -15,6 +15,7 @@ Everything was measured from a recorded session (Nov 2026, 2560x1369 game
 area; debug_frames/fishing_research/20261127-002202) and live tests.
 """
 import functools
+import json
 import logging
 import sys
 import time
@@ -28,8 +29,8 @@ sys.path.insert(0, str(HERE.parent / "repair"))  # shared screen code
 
 import snapshots  # noqa: E402
 from repair_mini_game import session_hotkeys  # noqa: E402
-from screen import (REPO_ROOT, GameWindow, check_stop, live_session,  # noqa: E402
-                    load_marker, match_marker, wait)
+from screen import (REPO_ROOT, GameWindow, WindowNotFound, check_stop,  # noqa: E402
+                    live_session, load_marker, match_marker, wait)
 
 log = logging.getLogger("repair")
 
@@ -97,19 +98,24 @@ LOOK_RELEASED = 0.05     # ... and while not
 SCENE_EVERY = 10         # while holding, check for the catch panel every n gauge reads
 DROP = 1.5 / (HEALTH_BOTTOM - HEALTH_TOP)   # a loss this big means the fish is pulling
 # Tug Line stops the fish at once, so after it the reel can go on almost
-# straight away; without it, wait it out, longer each time it still pulls
-# (trying again costs line too).
-# Live, 0.4 s was dead time (the user: wasted ms); the key press itself
-# takes ~60 ms, and if the fish still pulls the next gauge read lets go.
+# straight away (live, 0.4 s was dead time: the key press takes ~60 ms,
+# and if the fish still pulls the next gauge read lets go).
 TUG_RESUME = 0.1
-PAUSE = 1.5              # s to let go when the fish pulls and Tug Line isn't ready
-PAUSE_MAX = 4.0
-HEAL_BELOW = 0.45        # line health share for Heal Line
+# Without Tug Line, try the reel again soon: a fish fights in bursts of
+# random length, and live, waits that grew to 4 s let a shark rest and
+# fight again while the bot hardly reeled (the user had to take over). A
+# failed try costs ~1-2% of the line, so while there's line to spare,
+# try every PAUSE; only when it's low do the waits grow (to PAUSE_MAX).
+PAUSE = 0.6              # s before trying again after a pull (no Tug Line)
+PAUSE_MAX = 2.5
+SPARE_LINE = 0.6         # line share above which retries stay at PAUSE
+HEAL_BELOW = 0.5         # line health share for Heal Line (the user: not before 50%)
 PULL_ABOVE = 0.7         # ... and for Pull Fish
 FIGHT_TIMEOUT = 300.0
 LOOT_WAIT = 12.0         # s at most for the catch panel and loot window to be dealt with
 LOOT_GRACE = 2.0         # s with neither showing before casting again (some fish have no loot)
 CATCH_LOG = REPO_ROOT / "debug_frames" / "fishing_catches"
+FIGHT_LOG = REPO_ROOT / "logs"             # fights-YYYYMMDD.jsonl, one line per fight
 
 
 # -- reading the screen ------------------------------------------------------------
@@ -289,17 +295,25 @@ class Reel:
 
     Holding while the fish pulls costs line health, and the game doesn't
     always say when it pulls (live: a shark fight showed no "!" or text at
-    all), so a health drop is the sure sign: let go at once, wait a pause,
-    hold again; the pause grows while the fish keeps pulling and resets
-    once a hold goes by without a loss. A red "!" also means let go.
+    all), so a health drop is the sure sign: let go at once, wait a short
+    pause, hold again. While the line has health to spare the pause stays
+    short (a fish rests and fights in random bursts, and long waits gave
+    a shark time to do both); when it's low, the pause grows with each
+    pull in a row. A hold that goes a second without loss resets that. A
+    red "!" also means let go.
     """
 
     def __init__(self, now):
         self.holding = False
         self.level = None          # health when the current hold started / last steady
         self.resume_at = now       # don't hold before this
-        self.pause = PAUSE
+        self.pulls = 0             # pulls in a row (no calm hold between)
         self.held_since = None
+
+    def wait_after_pull(self, level):
+        if level >= SPARE_LINE:
+            return PAUSE
+        return min(PAUSE_MAX, PAUSE * 1.5 ** (self.pulls - 1))
 
     def update(self, now, level, red_mark=False):
         """Returns "hold", "release" or None (no change), and remembers the
@@ -308,12 +322,12 @@ class Reel:
             pulled = red_mark or (self.level is not None and level < self.level - DROP)
             if pulled:
                 self.holding = False
-                self.resume_at = now + self.pause
-                self.pause = min(PAUSE_MAX, self.pause * 1.5)
+                self.pulls += 1
+                self.resume_at = now + self.wait_after_pull(level)
                 self.level = level
                 return "release"
             if self.held_since is not None and now - self.held_since > 1.0:
-                self.pause = PAUSE          # a calm stretch: the fish is tired again
+                self.pulls = 0              # a calm stretch: the fish is tired again
             self.level = max(self.level, level) if self.level is not None else level
             return None
         self.level = level
@@ -322,6 +336,31 @@ class Reel:
             self.held_since = now
             return "hold"
         return None
+
+
+def log_fight(start, result, events, folder=None):
+    """Append one fight to logs/fights-YYYYMMDD.jsonl: how it ended, how
+    long it took, the line's health and every hold, pull (let go), Tug
+    Line, Heal Line and Pull Fish with its time (s into the fight) and the
+    line's health then. For tuning the reel timings from real fights."""
+    levels = [lvl for _, _, lvl in events if lvl is not None]
+    record = {"ended": time.strftime("%Y-%m-%d %H:%M:%S"), "result": result,
+              "seconds": round(time.monotonic() - start, 1),
+              "pulls": sum(1 for e in events if e[1] == "pull"),
+              "tugs": sum(1 for e in events if e[1] == "tug"),
+              "heals": sum(1 for e in events if e[1] == "heal"),
+              "min_line": min(levels) if levels else None, "events": events}
+    try:
+        folder = Path(folder or FIGHT_LOG)
+        folder.mkdir(parents=True, exist_ok=True)
+        with open(folder / ("fights-%s.jsonl" % time.strftime("%Y%m%d")), "a",
+                  encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except (OSError, TypeError, ValueError):
+        log.debug("couldn't write the fight log", exc_info=True)
+    log.info("Fight %s in %.0fs: %d pulls, %d Tug, %d Heal, line down to %s.", result,
+             record["seconds"], record["pulls"], record["tugs"], record["heals"],
+             "%.0f%%" % (100 * record["min_line"]) if levels else "?")
 
 
 # -- playing -------------------------------------------------------------------------
@@ -462,55 +501,73 @@ class Fisher:
         return False
 
     def fight(self):
-        """Reel the hooked fish in. Returns "caught" or "lost"."""
+        """Reel the hooked fish in. Returns "caught" or "lost". Every hold,
+        let-go, Tug/Heal/Pull and the line's health go to the fight log."""
         t = self.table
         start = time.monotonic()
         reel = Reel(start)
-        n = 0
-        red = False
+        events = []
+        result = "lost"
+
+        def note(kind, level=None):
+            events.append([round(time.monotonic() - start, 2), kind,
+                           None if level is None else round(level, 3)])
         try:
-            while time.monotonic() - start < FIGHT_TIMEOUT:
-                check_stop()
-                now = time.monotonic()
-                g = t.gauge()
-                if not reel.holding or n % SCENE_EVERY == 0:
-                    if t.caught():
-                        return "caught"
-                if not reel.holding:
-                    red = t.mark("red") is not None
-                n += 1
-                if not g.line:
-                    # The gauge empties when the fish is landed (the
-                    # Congratulations panel follows) or lost.
-                    self.win.mouse_up(*CAST_POINT)
-                    reel.holding = False
-                    if self.wait_caught(3.0):
-                        return "caught"
-                    return "lost"
-                action = reel.update(now, g.level, red)
-                if action == "release":
-                    self.win.mouse_up(*CAST_POINT)
-                    tug = t.ready("tug")
-                    if tug:
-                        self.use("tug")
-                        reel.resume_at = time.monotonic() + TUG_RESUME
-                    log.debug("fish pulling (line %.1f%%%s): let go%s", 100 * g.level,
-                              ", red !" if red else "", ", Tug Line" if tug else
-                              ", waiting %.1fs" % (reel.resume_at - time.monotonic()))
-                    continue
-                if action == "hold":
-                    self.win.mouse_down(*CAST_POINT)
-                    continue
-                if not reel.holding and g.level < HEAL_BELOW and t.ready("heal"):
-                    self.use("heal")
-                elif reel.holding and n % SCENE_EVERY == 1 and g.level > PULL_ABOVE \
-                        and t.ready("pull"):
-                    self.use("pull")
-                time.sleep(LOOK_EVERY if reel.holding else LOOK_RELEASED)
-            log.warning("The fight took over %.0fs; letting go.", FIGHT_TIMEOUT)
-            return "lost"
+            result = self._fight(t, start, reel, note)
+            return result
         finally:
             self.win.mouse_up(*CAST_POINT)
+            log_fight(start, result, events)
+
+    def _fight(self, t, start, reel, note):
+        n = 0
+        red = False
+        while time.monotonic() - start < FIGHT_TIMEOUT:
+            check_stop()
+            now = time.monotonic()
+            g = t.gauge()
+            if not reel.holding or n % SCENE_EVERY == 0:
+                if t.caught():
+                    return "caught"
+            if not reel.holding:
+                red = t.mark("red") is not None
+            n += 1
+            if not g.line:
+                # The gauge empties when the fish is landed (the
+                # Congratulations panel follows) or lost.
+                self.win.mouse_up(*CAST_POINT)
+                reel.holding = False
+                if self.wait_caught(3.0):
+                    return "caught"
+                return "lost"
+            action = reel.update(now, g.level, red)
+            if action == "release":
+                self.win.mouse_up(*CAST_POINT)
+                note("pull", g.level)
+                tug = t.ready("tug")
+                if tug:
+                    self.use("tug")
+                    note("tug")
+                    reel.resume_at = time.monotonic() + TUG_RESUME
+                log.debug("fish pulling (line %.1f%%%s): let go%s", 100 * g.level,
+                          ", red !" if red else "", ", Tug Line" if tug else
+                          ", waiting %.1fs" % (reel.resume_at - time.monotonic()))
+                continue
+            if action == "hold":
+                self.win.mouse_down(*CAST_POINT)
+                note("hold", g.level)
+                continue
+            if not reel.holding and g.level < HEAL_BELOW and t.ready("heal"):
+                self.use("heal")
+                note("heal", g.level)
+                log.debug("line at %.0f%%: Heal Line", 100 * g.level)
+            elif reel.holding and n % SCENE_EVERY == 1 and g.level > PULL_ABOVE \
+                    and t.ready("pull"):
+                self.use("pull")
+                note("pull fish", g.level)
+            time.sleep(LOOK_EVERY if reel.holding else LOOK_RELEASED)
+        log.warning("The fight took over %.0fs; letting go.", FIGHT_TIMEOUT)
+        return "lost"
 
     def wait_caught(self, timeout):
         deadline = time.monotonic() + timeout
@@ -615,8 +672,21 @@ class Fisher:
 def fish_loop(win, max_fish=0):
     fisher = Fisher(win)
     stuck = 0
+    hidden = False
     while True:
-        result = fisher.fish_once()
+        try:
+            result = fisher.fish_once()
+        except WindowNotFound as e:
+            # Live: minimising the game crashed the bot. Wait for it instead
+            # (a fight in progress was let go on the way out).
+            if not hidden:
+                log.warning("%s; waiting for it to come back.", e)
+                hidden = True
+            wait(2.0)
+            continue
+        if hidden:
+            log.info("The game is back; carrying on.")
+            hidden = False
         if result == "not fishing":
             log.warning("The fishing game isn't up (no fishing skill bar); stand at a fishing "
                         "spot with the rod out. Stopping.")

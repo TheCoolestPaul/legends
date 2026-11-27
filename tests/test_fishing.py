@@ -91,16 +91,45 @@ def test_reel_holds_and_lets_go_when_the_line_is_hurt():
     assert reel.update(0.3 + fish_bot.PAUSE, 0.98) == "hold"
 
 
-def test_reel_waits_longer_while_the_fish_keeps_pulling():
+def test_reel_retries_soon_while_there_is_line_to_spare():
+    """Live: waits that grew to 4 s let a shark rest and fight again while
+    the bot hardly reeled; with line to spare, retries stay short."""
     reel = Reel(0.0)
     reel.update(0.0, 1.0)
-    reel.update(0.1, 0.9)                                   # pull 1: pause PAUSE
-    t = 0.1 + fish_bot.PAUSE
-    assert reel.update(t, 0.9) == "hold"
-    assert reel.update(t + 0.1, 0.8) == "release"           # pull 2 right away: longer pause
-    assert reel.update(t + 0.1 + fish_bot.PAUSE, 0.8) is None
-    assert reel.update(t + 0.1 + 1.5 * fish_bot.PAUSE, 0.8) == "hold"
+    t = 0.0
+    for level in (0.95, 0.9, 0.85, 0.8, 0.75, 0.7):        # pull after pull
+        t += 0.1
+        assert reel.update(t, level) == "release"
+        assert reel.update(t + fish_bot.PAUSE - 0.05, level) is None
+        t += fish_bot.PAUSE
+        assert reel.update(t, level) == "hold"
 
+
+def test_reel_backs_off_when_the_line_is_low():
+    reel = Reel(0.0)
+    reel.update(0.0, 0.58)
+    waits = []
+    t, level = 0.0, 0.58
+    for _ in range(4):
+        level -= 0.02
+        t += 0.1
+        assert reel.update(t, level) == "release"
+        waits.append(round(reel.resume_at - t, 2))
+        t = reel.resume_at
+        assert reel.update(t, level) == "hold"
+    assert waits == sorted(waits) and waits[0] == fish_bot.PAUSE
+    assert waits[-1] <= fish_bot.PAUSE_MAX and waits[-1] > waits[0]
+
+
+def test_each_fight_is_logged(tmp_path):
+    import json
+    events = [[0.5, "hold", 1.0], [2.0, "pull", 0.97], [2.0, "tug", None],
+              [2.1, "hold", 0.97], [5.0, "heal", 0.42]]
+    fish_bot.log_fight(0.0, "caught", events, folder=tmp_path)
+    (line,) = next(tmp_path.glob("fights-*.jsonl")).read_text().splitlines()
+    rec = json.loads(line)
+    assert rec["result"] == "caught" and rec["pulls"] == 1 and rec["tugs"] == 1
+    assert rec["heals"] == 1 and rec["min_line"] == 0.42 and rec["events"] == events
 
 def test_reel_lets_go_on_a_red_mark_and_waits_for_it_to_go():
     reel = Reel(0.0)
