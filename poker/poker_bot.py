@@ -10,7 +10,8 @@ winning against the players still holding cards (by dealing the unseen
 cards at random many times), and then:
 
 - bets or raises with a strong hand,
-- checks or calls with a fair one,
+- checks or calls with a fair one, or when the pot is big enough to pay
+  for the call ("Pot: N" over the board against "Call N"),
 - checks when that's free, and folds otherwise.
 
 It never presses "Swap 1st/2nd Card": swapping is cheating. Every decision
@@ -64,6 +65,11 @@ CALL_BUTTON = (1361, 1214)
 RAISE_BUTTON = (1525, 1214)
 FOLD_BUTTON = (1525, 1289)
 BUTTON_MATCH = 0.8
+# Amounts: "Pot: 1,600" (cream, centred above the board) and the white
+# "Call 160" on the call button. The number is what follows the widest gap.
+POT_TEXT = (1050, 558, 215, 47)
+CALL_TEXT = (1285, 1193, 150, 50)
+DIGIT_MATCH = 0.8                # share of a digit's pixels that must agree
 
 # -- play ----------------------------------------------------------------------------
 SIMULATIONS = 800
@@ -77,6 +83,13 @@ BET_EDGE = 0.22         # nobody has bet yet (Check is up): bet
 RAISE_EDGE = 0.35       # facing a bet: raise
 PREFLOP_EDGE = 0.2      # before the flop, either
 CALL_SHARE = 1.0        # call when it's at least a fair share
+# ... or when the pot pays for it: chance >= POT_MARGIN * call / (pot + call).
+# The margin allows for a bettor holding more than a random hand. Live (Nov
+# 27, 508 hands): 68 hands folded after putting gold in, e.g. heads-up on the
+# river at 40-48% to win, for one 160 call into pots of several hundred.
+POT_MARGIN = 2.0
+# Raised back after our own bet or raise: only call, unless nearly certain.
+RERAISE_SURE = 0.95
 TURN_EVERY = 0.25       # s between looks while waiting for our turn
 ACT_WAIT = 4.0          # s for the buttons to go away after a click
 IDLE_LIMIT = 600        # s without a turn before giving up (the table's gone?)
@@ -174,12 +187,16 @@ def raise_bar(opponents, can_check, preflop):
     return fair + edge * (1 - fair)
 
 
-def decide(chance, opponents, can_check, can_raise, preflop=False):
-    """'raise' (bet or raise), 'call' (check or call), 'check' or 'fold'."""
+def decide(chance, opponents, can_check, can_raise, preflop=False, pot=None, cost=None):
+    """'raise' (bet or raise), 'call' (check or call), 'check' or 'fold'.
+    ``pot`` and ``cost`` (the pot and the call, when they could be read) let
+    a cheap call into a big pot go ahead."""
     fair = 1.0 / (max(1, opponents) + 1)
     if can_raise and chance >= raise_bar(opponents, can_check, preflop):
         return "raise"
     if chance >= CALL_SHARE * fair:
+        return "call"
+    if not can_check and pot and cost and chance >= POT_MARGIN * cost / (pot + cost):
         return "call"
     return "check" if can_check else "fold"
 
@@ -242,6 +259,70 @@ def read_corner(img, scale=1.0):
     return rank[0] + suit[0]          # templates may have variants: rank_8b, suit_c2
 
 
+def pot_print(img):
+    """The pot label's cream print."""
+    r, g, b = (img[..., k].astype(np.int16) for k in range(3))
+    return (r > 150) & (g > 120) & (r - b > 40)
+
+
+def button_print(img):
+    """A button's white print (the stone behind it is grey)."""
+    return img.min(axis=2) > 190
+
+
+def glyph_boxes(mask):
+    """Left-to-right (x0, x1, y0, y1) of each run of printed columns."""
+    boxes, start = [], None
+    for x, c in enumerate(list(mask.any(axis=0)) + [False]):
+        if c and start is None:
+            start = x
+        elif not c and start is not None:
+            rows = np.where(mask[:, start:x].any(axis=1))[0]
+            boxes.append((start, x, rows[0], rows[-1] + 1))
+            start = None
+    return boxes
+
+
+def read_digit(glyph, templates):
+    """The digit a glyph's mask shows, or None."""
+    h, w = glyph.shape
+    best, score = None, 0.0
+    for name, tpl in templates.items():
+        th, tw = tpl.shape
+        if abs(w / h - tw / th) > 0.35 * tw / th:
+            continue
+        g = cv2.resize(glyph.astype(np.uint8), (tw, th), interpolation=cv2.INTER_NEAREST)
+        s = float((g == (tpl > 127)).mean())
+        if s > score:
+            best, score = name, s
+    return best[0] if best and score >= DIGIT_MATCH else None
+
+
+def read_amount(img, kind):
+    """The number after the label in a grab of "Pot: 1,600" (kind 'pot') or
+    "Call 160" ('call'), or None if there's none or a digit we don't know."""
+    mask = pot_print(img) if kind == "pot" else button_print(img)
+    boxes = glyph_boxes(mask)
+    if not boxes:
+        return None
+    tallest = max(y1 - y0 for _, _, y0, y1 in boxes)
+    boxes = [b for b in boxes if b[3] - b[2] >= 0.25 * tallest]     # specks off the frame
+    if len(boxes) < 2:
+        return None
+    gaps = [boxes[k + 1][0] - boxes[k][1] for k in range(len(boxes) - 1)]
+    number = boxes[gaps.index(max(gaps)) + 1:]
+    tall = max(y1 - y0 for _, _, y0, y1 in number)
+    text = ""
+    for x0, x1, y0, y1 in number:
+        if y1 - y0 < 0.6 * tall:
+            continue                      # a comma
+        digit = read_digit(mask[y0:y1, x0:x1], glyphs(kind))
+        if digit is None:
+            return None
+        text += digit
+    return int(text) if text else None
+
+
 def card_back_share(img):
     """Share of a seat's area covered by the pink card-back pattern."""
     px = img.astype(np.int16)
@@ -285,6 +366,13 @@ class Table:
             cards.append(c)
         return cards
 
+    def pot(self):
+        return read_amount(self.win.grab(*POT_TEXT), "pot")
+
+    def call_cost(self):
+        """What "Call N" costs, or None (Check, or a digit we don't know)."""
+        return read_amount(self.win.grab(*CALL_TEXT), "call")
+
     def opponents(self):
         """Players still holding cards."""
         w, h = SEAT_SIZE
@@ -310,6 +398,7 @@ class Player:
         self.hands = 0
         self.last_hole = None
         self.last_street = None        # (hole, board size) of our last turn
+        self.last_action = None        # and what we did then
 
     def act(self, buttons):
         """Play one turn; returns the action taken."""
@@ -320,6 +409,8 @@ class Player:
             self.hands += 1
             log.info("Hand %d: %s. Played %d hands so far.", self.hands,
                      " ".join(map(str, hole)), self.hands)
+        pot = self.table.pot()
+        cost = None if buttons["check"] else self.table.call_cost()
         if None in hole or "?" in hole or "?" in board:
             # A card we can't read (no template yet): don't gamble on it.
             chance = None
@@ -328,24 +419,27 @@ class Player:
         else:
             chance = win_chance(hole, board, opponents)
             action = decide(chance, opponents, buttons["check"], buttons["raise"],
-                            preflop=not board)
-        # Our turn again on the same street means someone raised us back.
-        # That player is usually strong, which the chance against random
-        # hands can't see (live: three nines re-raised the river into a
-        # full house), so from here on only call.
+                            preflop=not board, pot=pot, cost=cost)
+        # Facing a bet on a street where we already bet or raised: someone
+        # raised us back. That player is usually strong, which the chance
+        # against random hands can't see (live: three nines re-raised the
+        # river into a full house), so only call unless nearly certain.
+        # (Checking and then facing a bet is an ordinary bet.)
         street = (tuple(hole), len(board))
-        raised_back = street == self.last_street and not buttons["check"]
-        self.last_street = street
-        if raised_back and action == "raise":
+        raised_back = (street == self.last_street and self.last_action == "raise"
+                       and not buttons["check"])
+        if raised_back and action == "raise" and chance < RERAISE_SURE:
             action = "call"
-        log.info("%s | board %s | %d against | %s -> %s%s", " ".join(map(str, hole)),
-                 " ".join(board) or "-", opponents,
+        self.last_street, self.last_action = street, action
+        log.info("%s | board %s | %d against | pot %s, call %s | %s -> %s%s",
+                 " ".join(map(str, hole)), " ".join(board) or "-", opponents,
+                 pot if pot is not None else "?", cost if cost is not None else "-",
                  "?" if chance is None else "%.0f%%" % (100 * chance), action,
                  " (raised back)" if raised_back else "")
         log_decision({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "hole": hole, "board": board,
                       "opponents": opponents, "chance": chance, "check": buttons["check"],
                       "can_raise": buttons["raise"], "raised_back": raised_back,
-                      "action": action})
+                      "pot": pot, "cost": cost, "action": action})
         point = {"raise": RAISE_BUTTON, "call": CALL_BUTTON, "check": CALL_BUTTON,
                  "fold": FOLD_BUTTON}[action]
         self.win.click(*point)

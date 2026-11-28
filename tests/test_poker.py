@@ -53,6 +53,20 @@ def test_reads_the_cards(name, hole, board):
     assert t.board() == board
 
 
+@pytest.mark.parametrize("name, pot, cost", [
+    ("turn_call", 106, 16),
+    ("river_call", 146, 8),
+    ("turn_check", 18, None),        # "Check": nothing to call
+    ("ten_six", 1880, None),         # "Pot: 1,880"
+    ("waiting", 22, None),
+    ("between_hands", 6, None),
+])
+def test_reads_the_pot_and_the_call(name, pot, cost):
+    t = table(name)
+    assert t.pot() == pot
+    assert t.call_cost() == cost
+
+
 @pytest.mark.parametrize("name, opponents", [
     ("turn_check", 3),
     ("river_call", 2),       # the top-right seat had folded
@@ -118,6 +132,18 @@ def test_decide(chance, opponents, can_check, can_raise, preflop, action):
     assert decide(chance, opponents, can_check, can_raise, preflop) == action
 
 
+@pytest.mark.parametrize("chance, opponents, pot, cost, action", [
+    (0.45, 1, 800, 160, "call"),     # live: folded this heads-up on the river
+    (0.30, 1, 800, 160, "fold"),     # needs 2 x 160/960 = 33%
+    (0.20, 3, 360, 80, "fold"),      # needs 2 x 80/440 = 36%
+    (0.20, 2, 2000, 160, "call"),    # needs 15%
+    (0.45, 1, None, 160, "fold"),    # pot unread: fair share only
+    (0.45, 1, 800, None, "fold"),    # call unread: fair share only
+])
+def test_decide_with_pot_odds(chance, opponents, pot, cost, action):
+    assert decide(chance, opponents, False, True, False, pot=pot, cost=cost) == action
+
+
 def test_plays_a_turn(tmp_path, monkeypatch):
     """Four nines facing Call / Raise: raises (the right-hand button)."""
     monkeypatch.setattr(poker_bot, "LOG_DIR", tmp_path)
@@ -131,14 +157,32 @@ def test_plays_a_turn(tmp_path, monkeypatch):
 
 
 def test_only_calls_once_raised_back(tmp_path, monkeypatch):
-    """A second turn on the same street (someone raised us back): call, even
-    with four nines."""
+    """Facing a bet again on a street where we raised (someone raised us
+    back): call, unless nearly certain."""
     monkeypatch.setattr(poker_bot, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(poker_bot, "RERAISE_SURE", 1.01)     # never certain enough
     win = window("turn_call")
     player = Player(win)
     assert player.act(player.table.buttons()) == "raise"
     assert player.act(player.table.buttons()) == "call"
     assert win.actions[-1] == ("click", win.to_screen(*poker_bot.CALL_BUTTON))
+
+
+def test_raises_again_with_the_nuts(tmp_path, monkeypatch):
+    """Four nines raised back: nearly certain, so raise again."""
+    monkeypatch.setattr(poker_bot, "LOG_DIR", tmp_path)
+    player = Player(window("turn_call"))
+    assert player.act(player.table.buttons()) == "raise"
+    assert player.act(player.table.buttons()) == "raise"
+
+
+def test_checked_then_bet_into_is_not_raised_back(tmp_path, monkeypatch):
+    """We checked, then someone bet: an ordinary bet, free to raise."""
+    monkeypatch.setattr(poker_bot, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(poker_bot, "RERAISE_SURE", 1.01)
+    player = Player(window("turn_call"))       # 5s 9h on 9s Qh 9d 9c
+    player.last_street, player.last_action = (("5s", "9h"), 4), "call"
+    assert player.act(player.table.buttons()) == "raise"
 
 
 def test_never_presses_swap():
